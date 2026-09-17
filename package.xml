@@ -15,6 +15,8 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>drone_nodered_interfaces</exec_depend>
+  <!-- 流程要透過 rosbridge 跟 ROS 2 溝通，積木也來自這個套件 -->
+  <exec_depend>nodered_ros2</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

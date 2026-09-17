@@ -266,7 +266,8 @@ class DroneApi(Node):
         # NaN 跟任何數字比較都是 False，只用範圍比較會讓它直接通過。
         if not math.isfinite(h) or not (self.min_takeoff_altitude <= h <= self.max_takeoff_altitude):
             return self._finish(response, name, False,
-                                f"高度 {h} m 超出範圍 {self.min_takeoff_altitude}~"
+                                # :.2f —— float32 存不下剛好 0.2，直接印會變成 0.20000000298023224
+                                f"高度 {h:.2f} m 超出範圍 {self.min_takeoff_altitude}~"
                                 f"{self.max_takeoff_altitude} m")
         if not self._connected():
             return self._finish(response, name, False, "沒有收到 PX4 的狀態，確認 agent 有連上")

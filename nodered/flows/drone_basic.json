@@ -1,0 +1,700 @@
+[
+  {
+    "id": "f1a0c0de00000001",
+    "type": "subflow",
+    "name": "ROS2 呼叫服務",
+    "info": "呼叫一個 ROS 2 服務（透過 rosbridge）。\n\n### 設定\n- **SERVICE**：服務名稱，例如 `/MAV1/api/takeoff`\n- **TIMEOUT**：最多等幾秒，預設 10\n- **ROSBRIDGE_URL**：預設 `ws://127.0.0.1:9090`\n\n### 輸入\n`msg.payload` = 服務要帶的參數（物件），例如 `{\"altitude\": 1.5}`。\n不需要參數的服務（`std_srvs/Trigger`）可以不填。\n\n### 輸出\n- `msg.payload` = 服務的回覆，例如 `{\"success\": true, \"message\": \"...\"}`\n- `msg.ros` = `{ service, id, result, timedOut }`\n\n逾時、沒連上、服務不存在時，一樣會輸出 `{\"success\": false, \"message\": 原因}`，\n不會卡住。\n\n### 狀態\n積木下方顯示「已連線」或「未連線」。斷線會每 3 秒自動重連。\n",
+    "category": "ROS 2",
+    "in": [
+      {
+        "x": 60,
+        "y": 80,
+        "wires": [
+          {
+            "id": "f1a0c0de00000102"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 760,
+        "y": 80,
+        "wires": [
+          {
+            "id": "f1a0c0de00000102",
+            "port": 1
+          },
+          {
+            "id": "f1a0c0de00000105",
+            "port": 0
+          }
+        ]
+      }
+    ],
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": ""
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      },
+      {
+        "name": "ROSBRIDGE_URL",
+        "type": "str",
+        "value": "ws://127.0.0.1:9090"
+      }
+    ],
+    "meta": {
+      "module": "nodered_ros2",
+      "version": "0.1.0"
+    },
+    "color": "#A6BBCF",
+    "icon": "font-awesome/fa-exchange",
+    "inputLabels": [
+      "服務參數"
+    ],
+    "outputLabels": [
+      "服務回覆"
+    ],
+    "status": {
+      "x": 760,
+      "y": 220,
+      "wires": [
+        {
+          "id": "f1a0c0de00000107",
+          "port": 0
+        }
+      ]
+    }
+  },
+  {
+    "id": "f1a0c0de00000101",
+    "type": "websocket-client",
+    "z": "f1a0c0de00000001",
+    "path": "${ROSBRIDGE_URL}",
+    "tls": "",
+    "wholemsg": "false",
+    "hb": "0",
+    "subprotocol": "",
+    "headers": []
+  },
+  {
+    "id": "f1a0c0de00000102",
+    "type": "function",
+    "z": "f1a0c0de00000001",
+    "name": "組出 call_service",
+    "func": "// ============================================================\n//  送出服務呼叫\n//  輸入：msg.payload = 服務要帶的參數（物件），例如 {altitude: 1.5}\n//        沒有參數的服務（std_srvs/Trigger）可以不填\n//  輸出 1 → websocket out（送給 rosbridge）\n//  輸出 2 → 積木的輸出（立刻失敗、或逾時的時候）\n// ============================================================\nconst service = env.get(\"SERVICE\");\nconst url = env.get(\"ROSBRIDGE_URL\");\n\nfunction failNow(message) {\n    msg.payload = { success: false, message };\n    msg.ros = { service, timedOut: false };\n    return [null, msg];\n}\n\nif (!service) return failNow(\"積木沒有設定服務名稱（SERVICE）\");\n// 沒連上時 websocket out 送出會直接被丟掉（只印一行警告），\n// 使用者會以為指令送出了。所以先擋下來，立刻告訴他原因。\nif (!flow.get(\"connected\")) return failNow(`還沒連上 rosbridge（${url}）`);\n\n// 每次呼叫一個不重複的 id，回覆時用它對回「是哪一次呼叫」。\n// 雖然每個積木有自己的連線、不會收到別人的回覆，但同一個積木\n// 可能連按兩次，還是要分得出來。\nconst id = `call_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;\nconst args = (msg.payload && typeof msg.payload === \"object\" && !Array.isArray(msg.payload))\n    ? msg.payload : {};\n\n// 把原本的 msg 存起來，回覆時沿用（使用者在 msg 上加的欄位不會不見）。\n// flow context 在 subflow 裡是「這個積木自己的」，不會跟別的積木混在一起。\nconst pending = flow.get(\"pending\") || {};\npending[id] = RED.util.cloneMessage(msg);\nflow.set(\"pending\", pending);\n\nconst timeoutS = Number(env.get(\"TIMEOUT\")) > 0 ? Number(env.get(\"TIMEOUT\")) : 10;\nsetTimeout(() => {\n    const p = flow.get(\"pending\") || {};\n    if (!p[id]) return;                 // 已經收到回覆了\n    const orig = p[id];\n    delete p[id];\n    flow.set(\"pending\", p);\n    orig.payload = { success: false, message: `${timeoutS} 秒內沒有回應` };\n    orig.ros = { service, id, timedOut: true };\n    node.send([null, orig]);\n}, timeoutS * 1000);\n\n// rosbridge 協定的 call_service：op / id / service / args\nreturn [{ payload: JSON.stringify({ op: \"call_service\", id, service, args }) }, null];\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 230,
+    "y": 80,
+    "wires": [
+      [
+        "f1a0c0de00000103"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "f1a0c0de00000103",
+    "type": "websocket out",
+    "z": "f1a0c0de00000001",
+    "name": "",
+    "server": "",
+    "client": "f1a0c0de00000101",
+    "x": 480,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "f1a0c0de00000104",
+    "type": "websocket in",
+    "z": "f1a0c0de00000001",
+    "name": "",
+    "server": "",
+    "client": "f1a0c0de00000101",
+    "x": 160,
+    "y": 160,
+    "wires": [
+      [
+        "f1a0c0de00000105"
+      ]
+    ]
+  },
+  {
+    "id": "f1a0c0de00000105",
+    "type": "function",
+    "z": "f1a0c0de00000001",
+    "name": "挑出服務回覆",
+    "func": "// ============================================================\n//  收到 rosbridge 的訊息，挑出服務回覆\n// ============================================================\nlet m;\ntry {\n    // 收到的可能是 Buffer（ws 函式庫的行為），先轉成字串\n    m = JSON.parse(Buffer.isBuffer(msg.payload) ? msg.payload.toString() : msg.payload);\n} catch (e) {\n    return null;\n}\nif (m.op !== \"service_response\") return null;\n\nconst p = flow.get(\"pending\") || {};\nconst orig = p[m.id];\nif (!orig) return null;                 // 不是這個積木送的，或已經逾時\ndelete p[m.id];\nflow.set(\"pending\", p);\n\nif (m.result) {\n    // 服務正常回覆：values 就是服務的回傳內容，例如 { success, message }\n    orig.payload = m.values;\n} else {\n    // rosbridge 本身呼叫失敗（服務不存在、格式不對…），values 是錯誤訊息\n    const detail = typeof m.values === \"string\" ? m.values : JSON.stringify(m.values);\n    orig.payload = { success: false, message: `rosbridge 呼叫失敗：${detail}` };\n}\norig.ros = { service: env.get(\"SERVICE\"), id: m.id, result: m.result, timedOut: false };\nreturn orig;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 480,
+    "y": 160,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "f1a0c0de00000106",
+    "type": "status",
+    "z": "f1a0c0de00000001",
+    "name": "連線狀態",
+    "scope": [
+      "f1a0c0de00000104"
+    ],
+    "x": 140,
+    "y": 220,
+    "wires": [
+      [
+        "f1a0c0de00000107"
+      ]
+    ]
+  },
+  {
+    "id": "f1a0c0de00000107",
+    "type": "function",
+    "z": "f1a0c0de00000001",
+    "name": "記錄連線",
+    "func": "// ============================================================\n//  追蹤連線狀態（websocket in 連上／斷線時會發出狀態事件）\n//  顯示在積木下方，並記下目前有沒有連上\n// ============================================================\nconst ev = msg.status && msg.status.event;\nif (ev === \"connect\") {\n    flow.set(\"connected\", true);\n    return { payload: { fill: \"green\", shape: \"dot\", text: \"已連線\" } };\n}\nif (ev === \"disconnect\" || ev === \"error\") {\n    flow.set(\"connected\", false);\n    // 斷線後 Node-RED 每 3 秒會自動重連（22-websocket.js），這裡不用處理\n    return { payload: { fill: \"red\", shape: \"ring\", text: \"未連線（自動重連中）\" } };\n}\nreturn null;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 480,
+    "y": 220,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "f1a0c0de00000002",
+    "type": "subflow",
+    "name": "ROS2 訂閱",
+    "info": "訂閱一個 ROS 2 topic（透過 rosbridge），每收到一筆就輸出一次。\n\n### 設定\n- **TOPIC**：topic 名稱，例如 `/MAV1/api/status`\n- **TYPE**：訊息型別，例如 `std_msgs/msg/String`（可留空讓 rosbridge 自己判斷）\n- **THROTTLE_MS**：最快每幾毫秒送一筆，0 = 不限制\n- **ROSBRIDGE_URL**：預設 `ws://127.0.0.1:9090`\n\n### 輸出\n- `msg.payload` = ROS 訊息本身，例如 `std_msgs/String` 是 `{\"data\": \"...\"}`\n- `msg.topic` = topic 名稱\n\n### 狀態\n積木下方顯示「已訂閱」或「未連線」。\nrosbridge 重開後會自動重新連線、重新訂閱。\n",
+    "category": "ROS 2",
+    "in": [],
+    "out": [
+      {
+        "x": 700,
+        "y": 80,
+        "wires": [
+          {
+            "id": "f1a0c0de00000204",
+            "port": 0
+          }
+        ]
+      }
+    ],
+    "env": [
+      {
+        "name": "TOPIC",
+        "type": "str",
+        "value": ""
+      },
+      {
+        "name": "TYPE",
+        "type": "str",
+        "value": ""
+      },
+      {
+        "name": "THROTTLE_MS",
+        "type": "num",
+        "value": "0"
+      },
+      {
+        "name": "ROSBRIDGE_URL",
+        "type": "str",
+        "value": "ws://127.0.0.1:9090"
+      }
+    ],
+    "meta": {
+      "module": "nodered_ros2",
+      "version": "0.1.0"
+    },
+    "color": "#A6BBCF",
+    "icon": "font-awesome/fa-rss",
+    "outputLabels": [
+      "ROS 訊息"
+    ],
+    "status": {
+      "x": 700,
+      "y": 160,
+      "wires": [
+        {
+          "id": "f1a0c0de00000206",
+          "port": 1
+        }
+      ]
+    }
+  },
+  {
+    "id": "f1a0c0de00000201",
+    "type": "websocket-client",
+    "z": "f1a0c0de00000002",
+    "path": "${ROSBRIDGE_URL}",
+    "tls": "",
+    "wholemsg": "false",
+    "hb": "0",
+    "subprotocol": "",
+    "headers": []
+  },
+  {
+    "id": "f1a0c0de00000203",
+    "type": "websocket in",
+    "z": "f1a0c0de00000002",
+    "name": "",
+    "server": "",
+    "client": "f1a0c0de00000201",
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "f1a0c0de00000204"
+      ]
+    ]
+  },
+  {
+    "id": "f1a0c0de00000204",
+    "type": "function",
+    "z": "f1a0c0de00000002",
+    "name": "只留這個 topic",
+    "func": "// ============================================================\n//  收到 rosbridge 的訊息，只留這個 topic 的資料\n// ============================================================\nlet m;\ntry {\n    m = JSON.parse(Buffer.isBuffer(msg.payload) ? msg.payload.toString() : msg.payload);\n} catch (e) {\n    return null;\n}\nif (m.op !== \"publish\" || m.topic !== env.get(\"TOPIC\")) return null;\n// payload 就是 ROS 訊息本身，例如 std_msgs/String 會是 { data: \"...\" }\nreturn { topic: m.topic, payload: m.msg };\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 420,
+    "y": 80,
+    "wires": [
+      []
+    ]
+  },
+  {
+    "id": "f1a0c0de00000205",
+    "type": "status",
+    "z": "f1a0c0de00000002",
+    "name": "連線狀態",
+    "scope": [
+      "f1a0c0de00000203"
+    ],
+    "x": 140,
+    "y": 160,
+    "wires": [
+      [
+        "f1a0c0de00000206"
+      ]
+    ]
+  },
+  {
+    "id": "f1a0c0de00000206",
+    "type": "function",
+    "z": "f1a0c0de00000002",
+    "name": "連上就訂閱",
+    "func": "// ============================================================\n//  連上時送出訂閱；斷線時更新狀態\n//  輸出 1 → websocket out（subscribe 請求）\n//  輸出 2 → 積木下方的狀態\n// ============================================================\nconst ev = msg.status && msg.status.event;\nconst topic = env.get(\"TOPIC\");\n\nif (ev === \"connect\") {\n    if (!topic) {\n        return [null, { payload: { fill: \"red\", shape: \"ring\", text: \"沒有設定 TOPIC\" } }];\n    }\n    // ⚠️ 每次（重新）連上都要再訂閱一次。\n    //    rosbridge 不會記得之前誰訂閱過什麼，重開之後訂閱就消失了。\n    const req = { op: \"subscribe\", id: `sub_${topic}`, topic };\n    const type = env.get(\"TYPE\");\n    if (type) req.type = type;\n    const throttle = Number(env.get(\"THROTTLE_MS\"));\n    if (throttle > 0) req.throttle_rate = throttle;   // rosbridge 端限制最快多久送一筆\n    return [\n        { payload: JSON.stringify(req) },\n        { payload: { fill: \"green\", shape: \"dot\", text: `已訂閱 ${topic}` } },\n    ];\n}\nif (ev === \"disconnect\" || ev === \"error\") {\n    return [null, { payload: { fill: \"red\", shape: \"ring\", text: \"未連線（自動重連中）\" } }];\n}\nreturn null;\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 380,
+    "y": 160,
+    "wires": [
+      [
+        "f1a0c0de00000202"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "f1a0c0de00000202",
+    "type": "websocket out",
+    "z": "f1a0c0de00000002",
+    "name": "",
+    "server": "",
+    "client": "f1a0c0de00000201",
+    "x": 600,
+    "y": 220,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee00000000",
+    "type": "tab",
+    "label": "無人機控制（MAV1）",
+    "disabled": false,
+    "info": "起飛／盤旋／降落 + 狀態 + log。由 drone_nodered/nodered/make_drone_basic.py 產生。"
+  },
+  {
+    "id": "d0c0ffee00000001",
+    "type": "comment",
+    "z": "d0c0ffee00000000",
+    "name": "使用說明（點我，看右側「資訊」分頁）",
+    "info": "### 用之前要先開這些（各開一個終端）\n```\n~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh\nMicroXRCEAgent udp4 -p 8888\nros2 launch drone_nodered drone_api.launch.py\nros2 launch nodered_ros2 rosbridge.launch.py\n```\n\n### 怎麼用\n- 點「起飛 1.5 m」「盤旋」「降落」左邊的小方塊\n- 結果、狀態、log 都在右側的 **Debug** 分頁（蟲子圖示）\n- 積木下方顯示「已連線」才能用；「未連線」代表 rosbridge 沒開\n\n### 改起飛高度\n雙擊「起飛 1.5 m」→ 把 payload 的 `1.5` 改掉 → 完成 → 右上角 **Deploy**。\n允許範圍 0.5–5 m（drone_api_node 的參數），超出會被拒絕。\n\n### 狀態為什麼不是每 0.5 秒一筆\n只有「模式、解鎖、落地」改變時才顯示，避免洗版。顯示時會附上當下的高度。\n",
+    "x": 220,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee0000000a",
+    "type": "inject",
+    "z": "d0c0ffee00000000",
+    "name": "起飛 1.5 m",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{\"altitude\": 1.5}",
+    "payloadType": "json",
+    "x": 150,
+    "y": 100,
+    "wires": [
+      [
+        "d0c0ffee0000000b"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000000b",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffee00000000",
+    "name": "/MAV1/api/takeoff",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/takeoff"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 420,
+    "y": 100,
+    "wires": [
+      [
+        "d0c0ffee0000000c"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000000c",
+    "type": "debug",
+    "z": "d0c0ffee00000000",
+    "name": "起飛 1.5 m：結果",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 700,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee00000014",
+    "type": "inject",
+    "z": "d0c0ffee00000000",
+    "name": "盤旋",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{}",
+    "payloadType": "json",
+    "x": 150,
+    "y": 160,
+    "wires": [
+      [
+        "d0c0ffee00000015"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000015",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffee00000000",
+    "name": "/MAV1/api/hover",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/hover"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 420,
+    "y": 160,
+    "wires": [
+      [
+        "d0c0ffee00000016"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000016",
+    "type": "debug",
+    "z": "d0c0ffee00000000",
+    "name": "盤旋：結果",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 700,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee0000001e",
+    "type": "inject",
+    "z": "d0c0ffee00000000",
+    "name": "降落",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{}",
+    "payloadType": "json",
+    "x": 150,
+    "y": 220,
+    "wires": [
+      [
+        "d0c0ffee0000001f"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000001f",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffee00000000",
+    "name": "/MAV1/api/land",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/land"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 420,
+    "y": 220,
+    "wires": [
+      [
+        "d0c0ffee00000020"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000020",
+    "type": "debug",
+    "z": "d0c0ffee00000000",
+    "name": "降落：結果",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 700,
+    "y": 220,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee00000032",
+    "type": "subflow:f1a0c0de00000002",
+    "z": "d0c0ffee00000000",
+    "name": "/MAV1/api/status",
+    "env": [
+      {
+        "name": "TOPIC",
+        "type": "str",
+        "value": "/MAV1/api/status"
+      },
+      {
+        "name": "TYPE",
+        "type": "str",
+        "value": "std_msgs/msg/String"
+      }
+    ],
+    "x": 170,
+    "y": 300,
+    "wires": [
+      [
+        "d0c0ffee00000033"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000033",
+    "type": "function",
+    "z": "d0c0ffee00000000",
+    "name": "整理狀態",
+    "func": "// 把 drone_api_node 的狀態 JSON 整理成好讀的樣子\nlet s;\ntry {\n    s = JSON.parse(msg.payload.data);   // std_msgs/String 的內容在 data 欄位\n} catch (e) {\n    return null;\n}\nif (!s.connected) {\n    msg.payload = { 連線: false, 說明: \"drone_api_node 沒收到 PX4 的狀態\" };\n    msg.key = \"未連線\";\n    return msg;\n}\nmsg.payload = { 模式: s.mode, 解鎖: s.armed, 落地: s.landed, 高度_m: s.altitude_m };\n// 下一個 filter 節點「只比對 msg.key」：模式、解鎖、落地有變才輸出。\n// 高度不放進 key —— 它每 0.5 秒都在變，放進去的話 debug 側欄會被洗版。\nmsg.key = `${s.mode}|${s.armed}|${s.landed}`;\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 300,
+    "wires": [
+      [
+        "d0c0ffee00000034"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000034",
+    "type": "rbe",
+    "z": "d0c0ffee00000000",
+    "name": "只在模式／解鎖／落地變化時",
+    "func": "rbe",
+    "gap": "",
+    "start": "",
+    "inout": "out",
+    "septopics": false,
+    "property": "key",
+    "topi": "topic",
+    "x": 640,
+    "y": 300,
+    "wires": [
+      [
+        "d0c0ffee00000035"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000035",
+    "type": "debug",
+    "z": "d0c0ffee00000000",
+    "name": "狀態",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 880,
+    "y": 300,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee0000003c",
+    "type": "subflow:f1a0c0de00000002",
+    "z": "d0c0ffee00000000",
+    "name": "/rosout",
+    "env": [
+      {
+        "name": "TOPIC",
+        "type": "str",
+        "value": "/rosout"
+      },
+      {
+        "name": "TYPE",
+        "type": "str",
+        "value": "rcl_interfaces/msg/Log"
+      }
+    ],
+    "x": 150,
+    "y": 360,
+    "wires": [
+      [
+        "d0c0ffee0000003d"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000003d",
+    "type": "function",
+    "z": "d0c0ffee00000000",
+    "name": "只留 drone_api_node",
+    "func": "// 只留 drone_api_node 的 log，格式簡化成「[等級] 內容」\n// /rosout 會收到「所有」節點的 log（rosbridge 自己也一直在印），所以要過濾。\n// 多機時把 MAV1 改成對應的 namespace。\nconst NAME = \"MAV1.drone_api_node\";\nconst log = msg.payload;                 // rcl_interfaces/msg/Log\nif (!log || log.name !== NAME) return null;\nconst LEVEL = { 10: \"DEBUG\", 20: \"INFO\", 30: \"WARN\", 40: \"ERROR\", 50: \"FATAL\" };\nmsg.topic = log.name;\nmsg.payload = `[${LEVEL[log.level] || log.level}] ${log.msg}`;\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 360,
+    "wires": [
+      [
+        "d0c0ffee0000003e"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000003e",
+    "type": "debug",
+    "z": "d0c0ffee00000000",
+    "name": "log",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 700,
+    "y": 360,
+    "wires": []
+  }
+]
