@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  empty.sdf — Node-RED 專案用的空白世界（只有地面和光源，之後要加東西直接改這個檔）
+
+  從 PX4 內建的 Tools/simulation/gz/worlds/default.sdf 複製，只改了一個地方：
+    <world name="default">  →  <world name="empty">
+
+  ⚠️ world name 一定要跟檔名一致（empty.sdf ↔ empty）。
+     PX4 的啟動腳本用這個名字去找 Gazebo 的服務：
+       px4-rc.gzsim:69   /world/${PX4_GZ_WORLD}/scene/info
+       px4-rc.gzsim:140  /world/${PX4_GZ_WORLD}/create   （把飛機放進世界）
+       px4-rc.gzsim:148  gz_bridge start -w ${PX4_GZ_WORLD}
+     名字對不上的話，Gazebo 開得起來，但 PX4 連不上、飛機不會出現。
+
+  ⚠️ 不要改 <magnetic_field> 和 <spherical_coordinates>。
+     start_empty_sitl.sh 設的 EKF2_MAG_DECL 14.62 是照這組磁場算的
+     （atan2(6e-6, 2.3e-5)）。磁場改了，航向估計就會偏。
+     這組數值和 drone_nav2_apriltag 的 nav2_arena.sdf 完全相同。
+
+  這個檔是手寫的，不是任何腳本產生的，可以直接編輯。
+-->
+<sdf version="1.9">
+  <world name="empty">
+    <physics type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <grid>false</grid>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>true</shadows>
+    </scene>
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>1 1</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode/>
+            </friction>
+            <bounce/>
+            <contact/>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>500 500</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+            <specular>0.8 0.8 0.8 1</specular>
+          </material>
+        </visual>
+        <pose>0 0 0 0 -0 0</pose>
+        <inertial>
+          <pose>0 0 0 0 -0 0</pose>
+          <mass>1</mass>
+          <inertia>
+            <ixx>1</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>1</iyy>
+            <iyz>0</iyz>
+            <izz>1</izz>
+          </inertia>
+        </inertial>
+        <enable_wind>false</enable_wind>
+      </link>
+      <pose>0 0 0 0 -0 0</pose>
+      <self_collide>false</self_collide>
+    </model>
+    <light name="sunUTC" type="directional">
+      <pose>0 0 500 0 -0 0</pose>
+      <cast_shadows>true</cast_shadows>
+      <intensity>1</intensity>
+      <direction>0.001 0.625 -0.78</direction>
+      <diffuse>0.904 0.904 0.904 1</diffuse>
+      <specular>0.271 0.271 0.271 1</specular>
+      <attenuation>
+        <range>2000</range>
+        <linear>0</linear>
+        <constant>1</constant>
+        <quadratic>0</quadratic>
+      </attenuation>
+      <spot>
+        <inner_angle>0</inner_angle>
+        <outer_angle>0</outer_angle>
+        <falloff>0</falloff>
+      </spot>
+    </light>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg> 8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+  </world>
+</sdf>
