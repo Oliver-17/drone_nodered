@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=無人機控制台（開）
+Comment=啟動 rosbridge、drone_api_node、Node-RED，並開啟瀏覽器
+Exec=@PKG_SRC@/scripts/console_start.sh
+Icon=applications-science
+Terminal=false
+Categories=Development;
+Keywords=drone;nodered;ros2;

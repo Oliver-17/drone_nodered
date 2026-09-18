@@ -4,15 +4,23 @@
 #
 #  用法：
 #      ~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh
-#      HEADLESS=1 ~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh   # 不開視窗
+#      HEADLESS=1 ~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh     # 不開視窗
+#      FOREGROUND=1 ~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh   # 前景模式，Ctrl+C 收乾淨
 #
 #  開完之後（另開終端）：
 #      MicroXRCEAgent udp4 -p 8888
 #      ros2 launch drone_nodered drone_api.launch.py
 #
 #  停止：
-#      pkill -x px4 ; pkill -f "gz sim"
+#      前景模式（FOREGROUND=1）→ 按 Ctrl+C，腳本自己收掉 PX4 和 Gazebo
+#      預設模式              → pkill -x px4 ; pkill -f "gz sim"
 #      （第二行一定要用 -f：gz 是 Ruby 包裝腳本，程序名是 ruby，-x 抓不到）
+#
+#  為什麼要有前景模式：
+#      預設模式把 PX4 丟到背景後腳本就結束，PX4 和 Gazebo 留著沒人管，要自己 pkill。
+#      交給 systemd 當服務跑時這樣行不通 —— systemd 看「主程式」判斷服務在不在，
+#      腳本一結束它就認定服務結束，把整組程序收掉，Gazebo 開起來馬上被關。
+#      前景模式讓「腳本的壽命 = 模擬的壽命」，收到停止訊號才去收尾。
 #
 #  ⚠️ 這支是從 drone_nav2_apriltag/scripts/start_arena_sitl.sh 複製改來的。
 #     差別只有：世界換成 empty、機型用 PX4 內建的 x500、只開一台、放在世界原點。
@@ -137,6 +145,61 @@ fix_preflight_params() {
     return 0
 }
 
+# --- 收尾：只收這次自己開的那些 ------------------------------------------------------
+# Gazebo 不是這支腳本開的，是 PX4 啟動時執行 px4-rc.gzsim 開的：
+#   :50  gz sim -r -s <世界>   （伺服器，算物理）
+#   :54  gz sim -g             （視窗，沒設 HEADLESS 才開）
+# 兩行都加了 &，所以 PX4 結束時不會把它們帶走，要我們自己收。
+gz_leftovers() {
+    # 比對啟動時間：只認「比這支腳本啟動 PX4 還晚出現」的，才不會誤殺你另外開的模擬
+    local now age_limit p etimes
+    now="$(date +%s)"
+    age_limit=$(( now - LAUNCH_EPOCH + 2 ))   # +2 秒容忍取樣誤差
+    for p in $(pgrep -f "gz sim" 2>/dev/null); do
+        etimes="$(ps -o etimes= -p "$p" 2>/dev/null | tr -d ' ')"
+        [ -n "$etimes" ] && [ "$etimes" -le "$age_limit" ] && echo "$p"
+    done
+}
+
+STOPPED=0
+stop_sim() {
+    trap - INT TERM        # 收尾途中再按 Ctrl+C 不要重複進來
+    # 被訊號打斷時，trap 收完尾、wait 也會跟著返回 → 下面那行又會呼叫一次，擋掉
+    [ "$STOPPED" = 1 ] && return 0
+    STOPPED=1
+    echo
+    echo "收工中…"
+
+    # 先抓 PX4 的子程序再殺 PX4 —— 順序反過來的話，PX4 一死子程序就被 init 收養，
+    # pgrep -P 就查不到了。
+    local kids targets p
+    kids="$(pgrep -P "$PX4_PID" 2>/dev/null | tr '\n' ' ')"
+    targets="$(gz_leftovers | tr '\n' ' ')"
+    echo "  PX4 PID $PX4_PID，子程序： ${kids:-（無）}"
+
+    kill "$PX4_PID" 2>/dev/null || true
+    for p in $kids $targets; do
+        kill "$p" 2>/dev/null || true
+    done
+
+    # 給它們 10 秒好好關（Gazebo 要存檔、釋放顯卡資源），超時才強制
+    local waited=0
+    while kill -0 "$PX4_PID" 2>/dev/null || [ -n "$(gz_leftovers)" ]; do
+        sleep 1
+        waited=$((waited + 1))
+        if [ "$waited" -ge 10 ]; then
+            echo "  ⚠ 10 秒還沒關完，強制結束"
+            kill -9 "$PX4_PID" 2>/dev/null || true
+            for p in $(gz_leftovers); do kill -9 "$p" 2>/dev/null || true; done
+            break
+        fi
+    done
+    echo "  ✓ 收乾淨了"
+    # 直接結束腳本：trap 跑完 bash 會回到原本的位置繼續（例如還在等 Gazebo 的迴圈），
+    # 那時 PX4 已經被收掉，再等下去只是白等到逾時，systemd 也會一直卡在停止中。
+    exit 0
+}
+
 # --- 清理舊程序 --------------------------------------------------------------------
 echo "清掉可能殘留的舊程序…"
 pkill -x px4 || true
@@ -148,16 +211,27 @@ WORK_DIR="$BUILD_DIR/instance_$INSTANCE"
 mkdir -p "$WORK_DIR"
 rm -f "$WORK_DIR/out.log"
 echo "啟動 $NAME  (instance $INSTANCE, MAV_SYS_ID $((INSTANCE+1)), 位置 E,N = $POSE)"
-(
-    cd "$WORK_DIR"
-    PX4_UXRCE_DDS_NS="$NAME" \
-    PX4_SYS_AUTOSTART=4001 \
-    PX4_SIM_MODEL="$SIM_MODEL" \
-    PX4_GZ_MODEL_POSE="$POSE" \
-    HEADLESS="${HEADLESS:-}" \
-    "$BUILD_DIR/bin/px4" -i "$INSTANCE" -d "$BUILD_DIR/etc" \
-        > "$WORK_DIR/out.log" 2>&1 &
-)
+# 記下啟動時刻：收尾找 Gazebo 時，用「比腳本晚開的才算我們的」來避免誤殺別人的模擬
+LAUNCH_EPOCH="$(date +%s)"
+# 這裡刻意不用小括號包起來。小括號會開子 shell，$! 拿到的 PID 傳不回來，
+# 而前景模式的 wait / kill 都要指名那一支 PX4（用名字殺會連你另外開的一起殺掉）。
+cd "$WORK_DIR"
+PX4_UXRCE_DDS_NS="$NAME" \
+PX4_SYS_AUTOSTART=4001 \
+PX4_SIM_MODEL="$SIM_MODEL" \
+PX4_GZ_MODEL_POSE="$POSE" \
+HEADLESS="${HEADLESS:-}" \
+"$BUILD_DIR/bin/px4" -i "$INSTANCE" -d "$BUILD_DIR/etc" \
+    > "$WORK_DIR/out.log" 2>&1 &
+PX4_PID=$!
+cd "$OLDPWD"
+
+# 立刻安裝收尾：啟動要 20 秒左右，這段期間被 systemd 停掉（或按 Ctrl+C）也要收得乾淨。
+# 之前把這行放在「就緒」之後，結果啟動中途關閉會留下 Gazebo，
+# 最後是 systemd 等 45 秒逾時強制砍掉，服務狀態變成 failed。
+if [ -n "${FOREGROUND:-}" ]; then
+    trap stop_sim INT TERM
+fi
 
 wait_for "Gazebo 世界 empty 已建立" 90 world_is_up
 wait_for "$NAME 已連上 XRCE Agent" "$WAIT_AGENT" instance_is_ready "$WORK_DIR/out.log" || true
@@ -173,4 +247,16 @@ echo "=================================================="
 echo " 就緒，世界： empty（單機 $NAME）"
 echo "=================================================="
 echo "log： $WORK_DIR/out.log"
-echo "停止： pkill -x px4 ; pkill -f 'gz sim'"
+
+if [ -n "${FOREGROUND:-}" ]; then
+    echo "停止： 按 Ctrl+C（前景模式，會自己收掉 PX4 和 Gazebo；trap 在 PX4 啟動時就裝好了）"
+    echo
+    # 卡在這裡等 PX4 —— 腳本活著才有機會在你喊停時收尾。
+    # || true：被訊號打斷時 wait 的回傳值不是 0，會被 set -e 當成錯誤
+    wait "$PX4_PID" || true
+    # PX4 自己當掉的情況：wait 正常返回，但 Gazebo 還在，一樣要收
+    stop_sim
+else
+    echo "停止： pkill -x px4 ; pkill -f 'gz sim'"
+    echo "      （或下次改用 FOREGROUND=1 啟動，Ctrl+C 就會自己收乾淨）"
+fi

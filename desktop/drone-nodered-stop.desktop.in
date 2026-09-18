@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=無人機控制台（停）
+Comment=關掉控制台和模擬，確認沒有殘留程序
+Exec=@PKG_SRC@/scripts/console_stop.sh
+Icon=process-stop
+Terminal=false
+Categories=Development;
+Keywords=drone;nodered;ros2;

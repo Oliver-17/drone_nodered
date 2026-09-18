@@ -1,0 +1,32 @@
+# =============================================================================
+#  drone-sim.service —— 模擬：MicroXRCEAgent + PX4 SITL（含 Gazebo）
+#
+#  這是範本，用法和注意事項見 drone-nodered.service.in 的檔頭。
+#  平常不用手動下指令，Node-RED 上的「開模擬／關模擬」按鈕就是在控制這個服務。
+#
+#  實機時完全用不到：PX4 是飛控板上的韌體、agent 在樹莓派上走序列埠。
+# =============================================================================
+[Unit]
+Description=無人機模擬（XRCE agent + PX4 SITL + Gazebo）
+
+# Gazebo 要開視窗，需要桌面的 DISPLAY。等桌面起來再開才不會失敗。
+After=graphical-session.target
+
+# PartOf：底座停掉時，這個服務自動跟著停。
+# 為什麼要有 —— Node-RED 的「全部關閉」只會停底座，沒有這行的話模擬會變孤兒，
+# Gazebo 留在背景吃顯卡，而且畫面上已經沒有任何地方可以關它了。
+PartOf=drone-nodered.service
+
+[Service]
+Type=simple
+
+# sim_all.launch.py 會用 FOREGROUND=1 開 start_empty_sitl.sh，
+# 所以腳本會一直活著，收到停止訊號才去收掉 PX4 和 Gazebo。
+# 少了那個模式，腳本開完就結束 → systemd 判定服務結束 → 剛開好的 Gazebo 馬上被殺掉。
+ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch drone_nodered sim_all.launch.py'
+
+# 45 秒：腳本收尾最多等 10 秒讓 Gazebo 好好關（釋放顯卡資源），其餘是裕度
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target

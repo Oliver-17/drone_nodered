@@ -1,0 +1,37 @@
+# =============================================================================
+#  drone-nodered.service —— 底座：rosbridge + drone_api_node + Node-RED
+#
+#  這是「範本」，不是可以直接用的服務檔。@WORKSPACE@ 之類的佔位符要由
+#  scripts/install_services.sh 換成這台電腦的實際路徑，再複製到
+#  ~/.config/systemd/user/。所以每個人 clone 下來都能用，不用手改檔案。
+#
+#  刻意「不」做的事：
+#    - 不 enable：登入不會自己開，要點桌面圖示才開（Oliver 不要東西常駐背景）
+#    - 不 Restart：當掉就是當掉。第一版要看得到錯誤，不要被自動重開洗掉
+# =============================================================================
+[Unit]
+Description=無人機控制台底座（rosbridge + drone_api_node + Node-RED）
+Documentation=file://@PKG_SRC@/README.md
+
+[Service]
+Type=simple
+
+# 為什麼要自己 source：systemd 開服務時不會經過你的終端機，也不讀 ~/.bashrc，
+# 所以 ROS 2 的環境變數全部沒有。少了這兩行，ros2 找不到指令，
+# rosbridge 也會不認得 drone_nodered_interfaces 的自訂服務格式（曾經踩過這個坑）。
+#
+# 為什麼要 exec：讓 ros2 launch 直接「變成」這個服務的主程式，而不是 bash 的子程序。
+# bash 通常會自己做這個最佳化，明寫出來是保險 —— 之後有人在後面多加一行指令，
+# 也不會變成 systemd 盯著 bash、真正的 launch 被丟在下面一層。
+ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch drone_nodered nodered_all.launch.py'
+
+# 收工要多久：rosbridge 和 Node-RED 很快，這裡給足裕度
+TimeoutStopSec=30
+
+# KillMode 用預設的 control-group：systemd 會把這個服務開出來的所有程序
+# 放在同一個群組，停的時候整組收掉，不會有漏網的背景程序。
+
+[Install]
+# 只有你哪天真的想「登入就自動開」時，才 systemctl --user enable。
+# 安裝腳本不會幫你 enable。
+WantedBy=default.target

@@ -347,13 +347,80 @@
     "type": "comment",
     "z": "d0c0ffee00000000",
     "name": "使用說明（點我，看右側「資訊」分頁）",
-    "info": "### 用之前要先開這些（各開一個終端）\n```\n~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh\nMicroXRCEAgent udp4 -p 8888\nros2 launch drone_nodered drone_api.launch.py\nros2 launch nodered_ros2 rosbridge.launch.py\n```\n\n### 怎麼用\n- 點「起飛 1.5 m」「盤旋」「降落」左邊的小方塊\n- 結果、狀態、log 都在右側的 **Debug** 分頁（蟲子圖示）\n- 積木下方顯示「已連線」才能用；「未連線」代表 rosbridge 沒開\n\n### 改起飛高度\n雙擊「起飛 1.5 m」→ 把 payload 的 `1.5` 改掉 → 完成 → 右上角 **Deploy**。\n允許範圍 0.5–5 m（drone_api_node 的參數），超出會被拒絕。\n\n### 狀態為什麼不是每 0.5 秒一筆\n只有「模式、解鎖、落地」改變時才顯示，避免洗版。顯示時會附上當下的高度。\n",
+    "info": "### 怎麼開始\n桌面點「無人機控制台（開）」→ 這頁的按鈕就能用了。\n\n### 這個流程更新了怎麼辦\n**不要用編輯器的「匯入」**（會問你重複 id，選錯就變成兩份，很難清）。跑這行：\n```\n~/ros2_ws/src/drone_nodered/scripts/install_flows.sh\n```\n它會先備份你現在的流程、換成新版、把控制台重開，然後 F5 重新整理就好。\nGazebo 要另外在 **「系統」分頁**按「開模擬」，開完等約 15 秒。\n\n### 怎麼用\n- 點「起飛 1.5 m」「盤旋」「降落」左邊的小方塊\n- 結果、狀態、log 都在右側的 **Debug** 分頁（蟲子圖示）\n- 積木下方顯示「已連線」才能用；「未連線」代表 rosbridge 沒開\n\n### 改高度\n- **起飛時的高度**：雙擊「起飛 1.5 m」→ 改 payload 的 `1.5` → 完成 → **Deploy**。\n- **飛到一半要改**：按「調整高度 3 m」（同樣可以雙擊改數字）。水平位置不會跑掉，\n  改完就在新高度盤旋。**要先起飛**，在地上按會被拒絕。\n\n兩個都限制 0.5–5 m（drone_api_node 的參數），超出會被拒絕。\n\n### 狀態查詢\n按「狀態查詢」會回報**按下去那一刻**的位置、高度、速度、朝向、模式。\n每一項都先檢查有效旗標，無效會寫「無效」而不是給你一個看似正常的數字。\n\n### 巡航\n「巡航（10 m 正方形）」會依序飛 (10,0) → (10,10) → (0,10) → (0,0)，飛完停在原點盤旋。\n- **座標**：離起飛點的公尺數，x 北為正、y 東為正。雙擊按鈕可以改成自己的路線\n  （最多 20 點、±50 m、速度 0.5–5 m/s）。\n- **中途要停**：按「盤旋」會就地煞停；按「降落」會停下來並降落。\n- **進度**：狀態那一欄會顯示「巡航 2/4 點」。\n- **要先起飛**，而且室內用動捕（沒有有效經緯度）時不能用 —— 會回訊息說明。\n\n### 狀態為什麼不是每 0.5 秒一筆\n只有「模式、解鎖、落地」改變時才顯示，避免洗版。顯示時會附上當下的高度。\n",
     "x": 220,
     "y": 40,
     "wires": []
   },
   {
     "id": "d0c0ffee0000000a",
+    "type": "inject",
+    "z": "d0c0ffee00000000",
+    "name": "狀態查詢",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{}",
+    "payloadType": "json",
+    "x": 170,
+    "y": 120,
+    "wires": [
+      [
+        "d0c0ffee0000000b"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000000b",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffee00000000",
+    "name": "/MAV1/api/state",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/state"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 480,
+    "y": 120,
+    "wires": [
+      [
+        "d0c0ffee0000000c"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000000c",
+    "type": "debug",
+    "z": "d0c0ffee00000000",
+    "name": "狀態查詢：結果",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 860,
+    "y": 120,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee00000014",
     "type": "inject",
     "z": "d0c0ffee00000000",
     "name": "起飛 1.5 m",
@@ -369,16 +436,16 @@
     "topic": "",
     "payload": "{\"altitude\": 1.5}",
     "payloadType": "json",
-    "x": 150,
-    "y": 100,
+    "x": 170,
+    "y": 210,
     "wires": [
       [
-        "d0c0ffee0000000b"
+        "d0c0ffee00000015"
       ]
     ]
   },
   {
-    "id": "d0c0ffee0000000b",
+    "id": "d0c0ffee00000015",
     "type": "subflow:f1a0c0de00000001",
     "z": "d0c0ffee00000000",
     "name": "/MAV1/api/takeoff",
@@ -394,16 +461,16 @@
         "value": "10"
       }
     ],
-    "x": 420,
-    "y": 100,
+    "x": 480,
+    "y": 210,
     "wires": [
       [
-        "d0c0ffee0000000c"
+        "d0c0ffee00000016"
       ]
     ]
   },
   {
-    "id": "d0c0ffee0000000c",
+    "id": "d0c0ffee00000016",
     "type": "debug",
     "z": "d0c0ffee00000000",
     "name": "起飛 1.5 m：結果",
@@ -415,12 +482,12 @@
     "targetType": "msg",
     "statusVal": "",
     "statusType": "auto",
-    "x": 700,
-    "y": 100,
+    "x": 860,
+    "y": 210,
     "wires": []
   },
   {
-    "id": "d0c0ffee00000014",
+    "id": "d0c0ffee0000001e",
     "type": "inject",
     "z": "d0c0ffee00000000",
     "name": "盤旋",
@@ -436,16 +503,16 @@
     "topic": "",
     "payload": "{}",
     "payloadType": "json",
-    "x": 150,
-    "y": 160,
+    "x": 170,
+    "y": 300,
     "wires": [
       [
-        "d0c0ffee00000015"
+        "d0c0ffee0000001f"
       ]
     ]
   },
   {
-    "id": "d0c0ffee00000015",
+    "id": "d0c0ffee0000001f",
     "type": "subflow:f1a0c0de00000001",
     "z": "d0c0ffee00000000",
     "name": "/MAV1/api/hover",
@@ -461,16 +528,16 @@
         "value": "10"
       }
     ],
-    "x": 420,
-    "y": 160,
+    "x": 480,
+    "y": 300,
     "wires": [
       [
-        "d0c0ffee00000016"
+        "d0c0ffee00000020"
       ]
     ]
   },
   {
-    "id": "d0c0ffee00000016",
+    "id": "d0c0ffee00000020",
     "type": "debug",
     "z": "d0c0ffee00000000",
     "name": "盤旋：結果",
@@ -482,12 +549,146 @@
     "targetType": "msg",
     "statusVal": "",
     "statusType": "auto",
-    "x": 700,
-    "y": 160,
+    "x": 860,
+    "y": 300,
     "wires": []
   },
   {
-    "id": "d0c0ffee0000001e",
+    "id": "d0c0ffee00000028",
+    "type": "inject",
+    "z": "d0c0ffee00000000",
+    "name": "調整高度 3 m",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{\"altitude\": 3.0}",
+    "payloadType": "json",
+    "x": 170,
+    "y": 390,
+    "wires": [
+      [
+        "d0c0ffee00000029"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000029",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffee00000000",
+    "name": "/MAV1/api/set_altitude",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/set_altitude"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 480,
+    "y": 390,
+    "wires": [
+      [
+        "d0c0ffee0000002a"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000002a",
+    "type": "debug",
+    "z": "d0c0ffee00000000",
+    "name": "調整高度 3 m：結果",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 860,
+    "y": 390,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee00000032",
+    "type": "inject",
+    "z": "d0c0ffee00000000",
+    "name": "巡航（10 m 正方形）",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "{\"x\": [10, 10, 0, 0], \"y\": [0, 10, 10, 0], \"altitude\": 3.0, \"speed\": 2.0, \"loops\": 1}",
+    "payloadType": "json",
+    "x": 170,
+    "y": 480,
+    "wires": [
+      [
+        "d0c0ffee00000033"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000033",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffee00000000",
+    "name": "/MAV1/api/patrol",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/patrol"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 480,
+    "y": 480,
+    "wires": [
+      [
+        "d0c0ffee00000034"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000034",
+    "type": "debug",
+    "z": "d0c0ffee00000000",
+    "name": "巡航（10 m 正方形）：結果",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 860,
+    "y": 480,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee0000003c",
     "type": "inject",
     "z": "d0c0ffee00000000",
     "name": "降落",
@@ -503,16 +704,16 @@
     "topic": "",
     "payload": "{}",
     "payloadType": "json",
-    "x": 150,
-    "y": 220,
+    "x": 170,
+    "y": 570,
     "wires": [
       [
-        "d0c0ffee0000001f"
+        "d0c0ffee0000003d"
       ]
     ]
   },
   {
-    "id": "d0c0ffee0000001f",
+    "id": "d0c0ffee0000003d",
     "type": "subflow:f1a0c0de00000001",
     "z": "d0c0ffee00000000",
     "name": "/MAV1/api/land",
@@ -528,16 +729,16 @@
         "value": "10"
       }
     ],
-    "x": 420,
-    "y": 220,
+    "x": 480,
+    "y": 570,
     "wires": [
       [
-        "d0c0ffee00000020"
+        "d0c0ffee0000003e"
       ]
     ]
   },
   {
-    "id": "d0c0ffee00000020",
+    "id": "d0c0ffee0000003e",
     "type": "debug",
     "z": "d0c0ffee00000000",
     "name": "降落：結果",
@@ -549,12 +750,12 @@
     "targetType": "msg",
     "statusVal": "",
     "statusType": "auto",
-    "x": 700,
-    "y": 220,
+    "x": 860,
+    "y": 570,
     "wires": []
   },
   {
-    "id": "d0c0ffee00000032",
+    "id": "d0c0ffee000000c8",
     "type": "subflow:f1a0c0de00000002",
     "z": "d0c0ffee00000000",
     "name": "/MAV1/api/status",
@@ -571,35 +772,35 @@
       }
     ],
     "x": 170,
-    "y": 300,
+    "y": 670,
     "wires": [
       [
-        "d0c0ffee00000033"
+        "d0c0ffee000000c9"
       ]
     ]
   },
   {
-    "id": "d0c0ffee00000033",
+    "id": "d0c0ffee000000c9",
     "type": "function",
     "z": "d0c0ffee00000000",
     "name": "整理狀態",
-    "func": "// 把 drone_api_node 的狀態 JSON 整理成好讀的樣子\nlet s;\ntry {\n    s = JSON.parse(msg.payload.data);   // std_msgs/String 的內容在 data 欄位\n} catch (e) {\n    return null;\n}\nif (!s.connected) {\n    msg.payload = { 連線: false, 說明: \"drone_api_node 沒收到 PX4 的狀態\" };\n    msg.key = \"未連線\";\n    return msg;\n}\nmsg.payload = { 模式: s.mode, 解鎖: s.armed, 落地: s.landed, 高度_m: s.altitude_m };\n// 下一個 filter 節點「只比對 msg.key」：模式、解鎖、落地有變才輸出。\n// 高度不放進 key —— 它每 0.5 秒都在變，放進去的話 debug 側欄會被洗版。\nmsg.key = `${s.mode}|${s.armed}|${s.landed}`;\nreturn msg;\n",
+    "func": "// 把 drone_api_node 的狀態 JSON 整理成好讀的樣子\nlet s;\ntry {\n    s = JSON.parse(msg.payload.data);   // std_msgs/String 的內容在 data 欄位\n} catch (e) {\n    return null;\n}\nif (!s.connected) {\n    msg.payload = { 連線: false, 說明: \"drone_api_node 沒收到 PX4 的狀態\" };\n    msg.key = \"未連線\";\n    return msg;\n}\nmsg.payload = { 模式: s.mode, 解鎖: s.armed, 落地: s.landed, 高度_m: s.altitude_m };\n// 巡航中才多顯示進度（第幾個點／共幾個點）\nconst pt = s.patrol || {};\nif (pt.active) {\n    msg.payload.巡航 = `${pt.index}/${pt.total} 點`;\n}\n// 下一個 filter 節點「只比對 msg.key」：模式、解鎖、落地有變才輸出。\n// 高度不放進 key —— 它每 0.5 秒都在變，放進去的話 debug 側欄會被洗版。\n// 巡航進度也放進 key：飛到下一個點時要看得到，不然中間十幾秒完全沒訊息\nmsg.key = `${s.mode}|${s.armed}|${s.landed}|${(s.patrol || {}).index}`;\nreturn msg;\n",
     "outputs": 1,
     "timeout": 0,
     "noerr": 0,
     "initialize": "",
     "finalize": "",
     "libs": [],
-    "x": 400,
-    "y": 300,
+    "x": 460,
+    "y": 670,
     "wires": [
       [
-        "d0c0ffee00000034"
+        "d0c0ffee000000ca"
       ]
     ]
   },
   {
-    "id": "d0c0ffee00000034",
+    "id": "d0c0ffee000000ca",
     "type": "rbe",
     "z": "d0c0ffee00000000",
     "name": "只在模式／解鎖／落地變化時",
@@ -610,16 +811,16 @@
     "septopics": false,
     "property": "key",
     "topi": "topic",
-    "x": 640,
-    "y": 300,
+    "x": 700,
+    "y": 670,
     "wires": [
       [
-        "d0c0ffee00000035"
+        "d0c0ffee000000cb"
       ]
     ]
   },
   {
-    "id": "d0c0ffee00000035",
+    "id": "d0c0ffee000000cb",
     "type": "debug",
     "z": "d0c0ffee00000000",
     "name": "狀態",
@@ -631,12 +832,12 @@
     "targetType": "msg",
     "statusVal": "",
     "statusType": "auto",
-    "x": 880,
-    "y": 300,
+    "x": 1000,
+    "y": 670,
     "wires": []
   },
   {
-    "id": "d0c0ffee0000003c",
+    "id": "d0c0ffee000000d2",
     "type": "subflow:f1a0c0de00000002",
     "z": "d0c0ffee00000000",
     "name": "/rosout",
@@ -652,16 +853,16 @@
         "value": "rcl_interfaces/msg/Log"
       }
     ],
-    "x": 150,
-    "y": 360,
+    "x": 160,
+    "y": 760,
     "wires": [
       [
-        "d0c0ffee0000003d"
+        "d0c0ffee000000d3"
       ]
     ]
   },
   {
-    "id": "d0c0ffee0000003d",
+    "id": "d0c0ffee000000d3",
     "type": "function",
     "z": "d0c0ffee00000000",
     "name": "只留 drone_api_node",
@@ -672,16 +873,16 @@
     "initialize": "",
     "finalize": "",
     "libs": [],
-    "x": 400,
-    "y": 360,
+    "x": 460,
+    "y": 760,
     "wires": [
       [
-        "d0c0ffee0000003e"
+        "d0c0ffee000000d4"
       ]
     ]
   },
   {
-    "id": "d0c0ffee0000003e",
+    "id": "d0c0ffee000000d4",
     "type": "debug",
     "z": "d0c0ffee00000000",
     "name": "log",
@@ -693,8 +894,312 @@
     "targetType": "msg",
     "statusVal": "",
     "statusType": "auto",
-    "x": 700,
-    "y": 360,
+    "x": 860,
+    "y": 760,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffeeffff0001",
+    "type": "tab",
+    "label": "系統",
+    "disabled": false,
+    "info": "用 systemd 開關模擬。由 make_drone_basic.py 產生。"
+  },
+  {
+    "id": "d0c0ffee00000064",
+    "type": "comment",
+    "z": "d0c0ffeeffff0001",
+    "name": "說明（點我，看右側「資訊」分頁）",
+    "info": "### 這個分頁在做什麼\n點按鈕 → 執行一行 `systemctl` → 由 **systemd** 去開關模擬。\n\nNode-RED 只負責「下指令」，不負責「看管模擬」。所以你按 Deploy 或重啟 Node-RED，\nGazebo 都不會被誤殺。\n\n### 按鈕\n| 按鈕 | 說明 |\n| --- | --- |\n| 開模擬 | Gazebo 視窗會跳出來。**PX4 約需 15 秒**才連上，狀態才會出現 |\n| 關模擬 | 只關模擬，控制台留著 |\n| 模擬狀態 | 現在有沒有在跑 |\n| 看模擬 log | 最後 40 行。開不起來時看這個 |\n| 全部關閉 | 模擬和控制台一起關（**Node-RED 自己也會關掉**，等於桌面的「停」圖示） |\n\n### 看不到無人機？\n空白世界沒有參照物，預設鏡頭在 6 公尺外，x500 只有 0.5 公尺，看起來像一個點。\n滑鼠滾輪推近，或在右側 Entity Tree 的 `x500_0` 上按右鍵 → Move to。\n",
+    "x": 220,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "d0c0ffee0000006e",
+    "type": "inject",
+    "z": "d0c0ffeeffff0001",
+    "name": "開模擬",
+    "props": [
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "開模擬",
+    "payload": "",
+    "payloadType": "str",
+    "x": 160,
+    "y": 120,
+    "wires": [
+      [
+        "d0c0ffee0000006f"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000006f",
+    "type": "exec",
+    "z": "d0c0ffeeffff0001",
+    "command": "systemctl --user start drone-sim.service && echo '已送出啟動。Gazebo 視窗會跳出來，PX4 約 15 秒後才連上' || echo '啟動失敗，按「看模擬 log」看原因'",
+    "addpay": "",
+    "append": "",
+    "useSpawn": "false",
+    "timer": "20",
+    "winHide": false,
+    "oldrc": false,
+    "name": "開模擬",
+    "x": 520,
+    "y": 120,
+    "wires": [
+      [
+        "d0c0ffee00000066"
+      ],
+      [
+        "d0c0ffee00000066"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffee00000078",
+    "type": "inject",
+    "z": "d0c0ffeeffff0001",
+    "name": "關模擬",
+    "props": [
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "關模擬",
+    "payload": "",
+    "payloadType": "str",
+    "x": 160,
+    "y": 220,
+    "wires": [
+      [
+        "d0c0ffee00000079"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000079",
+    "type": "exec",
+    "z": "d0c0ffeeffff0001",
+    "command": "systemctl --user stop drone-sim.service && echo '模擬已關閉' || echo '關閉失敗'",
+    "addpay": "",
+    "append": "",
+    "useSpawn": "false",
+    "timer": "20",
+    "winHide": false,
+    "oldrc": false,
+    "name": "關模擬",
+    "x": 520,
+    "y": 220,
+    "wires": [
+      [
+        "d0c0ffee00000066"
+      ],
+      [
+        "d0c0ffee00000066"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffee00000082",
+    "type": "inject",
+    "z": "d0c0ffeeffff0001",
+    "name": "模擬狀態",
+    "props": [
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "模擬狀態",
+    "payload": "",
+    "payloadType": "str",
+    "x": 160,
+    "y": 320,
+    "wires": [
+      [
+        "d0c0ffee00000083"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000083",
+    "type": "exec",
+    "z": "d0c0ffeeffff0001",
+    "command": "systemctl --user is-active drone-sim.service",
+    "addpay": "",
+    "append": "",
+    "useSpawn": "false",
+    "timer": "20",
+    "winHide": false,
+    "oldrc": false,
+    "name": "模擬狀態",
+    "x": 520,
+    "y": 320,
+    "wires": [
+      [
+        "d0c0ffee00000066"
+      ],
+      [
+        "d0c0ffee00000066"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffee0000008c",
+    "type": "inject",
+    "z": "d0c0ffeeffff0001",
+    "name": "看模擬 log",
+    "props": [
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "看模擬 log",
+    "payload": "",
+    "payloadType": "str",
+    "x": 160,
+    "y": 420,
+    "wires": [
+      [
+        "d0c0ffee0000008d"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee0000008d",
+    "type": "exec",
+    "z": "d0c0ffeeffff0001",
+    "command": "journalctl --user -u drone-sim.service -n 40 --no-pager",
+    "addpay": "",
+    "append": "",
+    "useSpawn": "false",
+    "timer": "20",
+    "winHide": false,
+    "oldrc": false,
+    "name": "看模擬 log",
+    "x": 520,
+    "y": 420,
+    "wires": [
+      [
+        "d0c0ffee00000066"
+      ],
+      [
+        "d0c0ffee00000066"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffee00000096",
+    "type": "inject",
+    "z": "d0c0ffeeffff0001",
+    "name": "全部關閉",
+    "props": [
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "全部關閉",
+    "payload": "",
+    "payloadType": "str",
+    "x": 160,
+    "y": 520,
+    "wires": [
+      [
+        "d0c0ffee00000097"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000097",
+    "type": "exec",
+    "z": "d0c0ffeeffff0001",
+    "command": "systemctl --user --no-block stop drone-nodered.service && echo '已送出關閉：模擬和控制台都會停，這個畫面也會失去連線'",
+    "addpay": "",
+    "append": "",
+    "useSpawn": "false",
+    "timer": "20",
+    "winHide": false,
+    "oldrc": false,
+    "name": "全部關閉",
+    "x": 520,
+    "y": 520,
+    "wires": [
+      [
+        "d0c0ffee00000066"
+      ],
+      [
+        "d0c0ffee00000066"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffee00000066",
+    "type": "function",
+    "z": "d0c0ffeeffff0001",
+    "name": "整理輸出",
+    "func": "// 整理 systemctl / journalctl 的輸出，讓 Debug 側欄看得懂\n// exec 節點的第 1 個輸出是 stdout、第 2 個是 stderr，兩個都接到這裡。\nconst raw = (msg.payload === undefined || msg.payload === null ? \"\" : msg.payload)\n    .toString().trim();\nif (!raw) return null;              // 指令成功但沒輸出的情況，不用顯示\n\n// systemctl is-active 只會印一個字，翻譯成看得懂的句子\nconst STATE = {\n    \"active\": \"模擬正在跑\",\n    \"inactive\": \"模擬沒在跑\",\n    \"failed\": \"模擬啟動失敗 —— 按「看模擬 log」查原因\",\n    \"activating\": \"模擬啟動中…\",\n    \"deactivating\": \"模擬關閉中…\",\n};\nmsg.payload = STATE[raw] || raw;\nreturn msg;\n",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 820,
+    "y": 320,
+    "wires": [
+      [
+        "d0c0ffee00000065"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffee00000065",
+    "type": "debug",
+    "z": "d0c0ffeeffff0001",
+    "name": "系統訊息",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1020,
+    "y": 320,
     "wires": []
   }
 ]
