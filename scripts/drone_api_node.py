@@ -39,8 +39,9 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 
-from px4_msgs.msg import (VehicleCommand, VehicleCommandAck, VehicleGlobalPosition,
-                          VehicleLandDetected, VehicleLocalPosition, VehicleStatus)
+from px4_msgs.msg import (BatteryStatus, FailsafeFlags, VehicleCommand, VehicleCommandAck,
+                          VehicleGlobalPosition, VehicleLandDetected, VehicleLocalPosition,
+                          VehicleStatus)
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
@@ -108,6 +109,11 @@ class DroneApi(Node):
         self.min_takeoff_altitude = p("min_takeoff_altitude", 0.5)
         self.max_takeoff_altitude = p("max_takeoff_altitude", 5.0)
         self.ack_timeout = p("ack_timeout_s", 3.0)
+        # 看門狗：狀況不對就自動降落。預設開 —— 誤觸發最多是提早降落，漏掉才危險。
+        self.watchdog_enabled = p("watchdog_enabled", True)
+        self.battery_min = p("battery_min", 0.30)          # 剩餘電量低於這個比例就降落
+        self.watchdog_debounce = p("watchdog_debounce_s", 1.0)  # 連續成立這麼久才動作
+        self.altitude_margin = p("altitude_margin_m", 1.0)      # 超過上限這麼多就算失控爬升
         # 超過這麼久沒收到 PX4 的狀態，就當作沒連上，拒絕所有指令。
         self.stale_after = p("stale_after_s", 2.0)
         status_rate = p("status_rate_hz", 2.0)
@@ -142,6 +148,14 @@ class DroneApi(Node):
                                  callback_group=self._sub_group)
         self.create_subscription(VehicleCommandAck, f"{out}/vehicle_command_ack",
                                  self._on_ack, qos, callback_group=self._sub_group)
+        # 看門狗要看的兩個來源
+        self.battery = self.failsafe = None
+        self.create_subscription(BatteryStatus, f"{out}/battery_status_v1",
+                                 lambda m: setattr(self, "battery", m), qos,
+                                 callback_group=self._sub_group)
+        self.create_subscription(FailsafeFlags, f"{out}/failsafe_flags",
+                                 lambda m: setattr(self, "failsafe", m), qos,
+                                 callback_group=self._sub_group)
 
         self.cmd_pub = self.create_publisher(
             VehicleCommand, f"/{self.px4_ns}/fmu/in/vehicle_command", 10)
@@ -177,6 +191,14 @@ class DroneApi(Node):
         self._patrol_thread = None
         self._patrol_stop = threading.Event()
         self._patrol_info = {"active": False, "index": 0, "total": 0}
+
+        # 任務狀態：Node-RED 的「等待完成」積木就是看這個。
+        # seq 每接受一個新指令就 +1 —— 積木靠它分辨「這次」和「上一次」的完成。
+        self._task = {"seq": 0, "name": "", "state": "idle", "message": ""}
+        self._task_deadline = 0.0
+        self._task_target = None        # 起飛／調整高度的目標高度
+        self._wd = {"tripped": False, "reason": ""}
+        self._wd_since = {}             # 每個異常條件「第一次成立」的時間
 
         self._last_cmd = ""
         self._last_ok = None
@@ -215,6 +237,12 @@ class DroneApi(Node):
         return -self.lpos.z
 
     def _publish_status(self):
+        self._check_task()
+        self._watchdog()
+        # 降落完成後解除看門狗，這樣下一趟飛行才會重新監看
+        if self._wd["tripped"] and self.land is not None and self.land.landed and not self._armed():
+            self._wd = {"tripped": False, "reason": ""}
+            self._wd_since.clear()
         connected = self._connected()
         d = {"connected": connected}
         if connected:
@@ -234,9 +262,103 @@ class DroneApi(Node):
                     self._prev[key] = d[key]
         # 巡航進度：Node-RED 才看得到「現在飛到第幾個點」
         d["patrol"] = dict(self._patrol_info)
+        d["task"] = dict(self._task)
+        d["watchdog"] = dict(self._wd)
         d.update({"last_command": self._last_cmd, "last_ok": self._last_ok,
                   "last_message": self._last_msg})
         self.status_pub.publish(String(data=json.dumps(d, ensure_ascii=False)))
+
+    # -------------------------------------------------------------------------
+    #  任務狀態（Node-RED 的「等待完成」積木就是看這個）
+    # -------------------------------------------------------------------------
+
+    def _begin_task(self, name, timeout_s, target=None, done_now=False):
+        """開始一個新任務。seq +1 是關鍵 —— 外面靠它分辨這次和上一次。"""
+        self._task = {"seq": self._task["seq"] + 1, "name": name,
+                      "state": "done" if done_now else "running", "message": ""}
+        self._task_target = target
+        self._task_deadline = time.monotonic() + timeout_s
+
+    def _end_task(self, ok, message=""):
+        if self._task["state"] == "running":
+            self._task = dict(self._task, state="done" if ok else "failed", message=message)
+            self.get_logger().info(f"[任務] {self._task['name']} → {self._task['state']}"
+                                   f"{'：' + message if message else ''}")
+
+    def _check_task(self):
+        """每次發狀態時檢查目前任務做完了沒。"""
+        t = self._task
+        if t["state"] != "running":
+            return
+        name, alt = t["name"], self._altitude()
+
+        if name in ("takeoff", "set_altitude"):
+            # ⚠️ 不能用「模式變成 LOITER」當完成 —— PX4 的 NAV_MC_ALT_RAD 預設 0.8 m，
+            #    離目標還有 0.8 m 就會切 LOITER，之後才慢慢爬完。只能看高度。
+            if alt is not None and self._task_target is not None \
+                    and abs(alt - self._task_target) < 0.2:
+                self._end_task(True, f"已到 {alt:.2f} m")
+        elif name == "land":
+            if self.land is not None and self.land.landed and not self._armed():
+                self._end_task(True, "已落地上鎖")
+        # patrol 由背景執行緒自己收尾（_patrol_note），這裡只管逾時
+
+        if self._task["state"] == "running" and time.monotonic() > self._task_deadline:
+            self._end_task(False, "逾時")
+
+    # -------------------------------------------------------------------------
+    #  看門狗：狀況不對就自動降落
+    # -------------------------------------------------------------------------
+
+    def _watchdog(self):
+        """每次發狀態時檢查一輪。只在「空中且已解鎖」時作用 —— 地上沒什麼好降的。"""
+        if not self.watchdog_enabled or self._wd["tripped"]:
+            return
+        if not self._connected() or not self._armed() or self.land.landed:
+            self._wd_since.clear()
+            return
+
+        bad = {}
+        # 位置估計失效：連盤旋都需要位置，所以只能降落
+        if self.failsafe is not None and self.failsafe.local_position_invalid:
+            bad["位置估計失效"] = "PX4 回報 local_position_invalid"
+        if self.lpos is not None and not self.lpos.xy_valid:
+            bad["水平位置無效"] = "xy_valid = false"
+        # remaining 是 0~1，-1 代表沒有有效值（BatteryStatus.msg:17）
+        if self.battery is not None and 0.0 <= self.battery.remaining < self.battery_min:
+            bad["電量過低"] = f"剩餘 {self.battery.remaining * 100:.0f}%"
+        alt = self._altitude()
+        limit = self.max_takeoff_altitude + self.altitude_margin
+        if alt is not None and alt > limit:
+            bad["高度超過上限"] = f"{alt:.2f} m > {limit:.2f} m"
+
+        now = time.monotonic()
+        for k in list(self._wd_since):
+            if k not in bad:
+                del self._wd_since[k]      # 條件不再成立就重新計時，避免偶發雜訊累積
+        for k, why in bad.items():
+            self._wd_since.setdefault(k, now)
+            # 防誤觸發：要連續成立一段時間。起飛瞬間 xy_valid 可能閃一下。
+            if now - self._wd_since[k] >= self.watchdog_debounce:
+                self._trip(f"{k}（{why}）")
+                return
+
+    def _trip(self, reason):
+        self._wd = {"tripped": True, "reason": reason}
+        self.get_logger().warn(f"[看門狗] {reason} → 自動降落")
+        # 開執行緒去送指令：送指令要等 ack（最多 3 秒），不能卡住發狀態的計時器
+        threading.Thread(target=self._emergency_land, args=(reason,), daemon=True).start()
+
+    def _emergency_land(self, reason):
+        self._cancel_patrol(reason)
+        self._pause_here()          # 先清掉 PX4 手上的目標點，否則它會先飛完那一段
+        r = self._send(VehicleCommand.VEHICLE_CMD_NAV_LAND)
+        ok = r == VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED
+        self._end_task(False, f"看門狗：{reason}")
+        self._last_cmd, self._last_ok = "watchdog_land", ok
+        self._last_msg = f"{reason} → 降落{'已送出' if ok else '失敗：' + self._ack_text(r)}"
+        if not ok:
+            self.get_logger().error(f"[看門狗] 降落指令被拒絕：{self._ack_text(r)}")
 
     # -------------------------------------------------------------------------
     #  送指令並等 ack
@@ -344,6 +466,8 @@ class DroneApi(Node):
         r = self._send(VehicleCommand.VEHICLE_CMD_NAV_TAKEOFF, p7=alt_amsl)
         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
             return self._finish(response, name, False, f"起飛指令被拒絕：{self._ack_text(r)}")
+        # 60 秒：爬 5 m（上限）就算慢也夠了；逾時會讓「等待完成」走失敗出口
+        self._begin_task(name, 60.0, target=h)
         return self._finish(response, name, True, f"已開始起飛（{alt_note}）")
 
     def _srv_hover(self, request, response):
@@ -356,15 +480,19 @@ class DroneApi(Node):
         # 巡航是背景在送目標點的，不先停掉的話它會繼續把飛機拉去下一個點
         was_patrolling = self._cancel_patrol("使用者按了盤旋")
         if was_patrolling:
+            self._end_task(False, "被盤旋指令取消")
+        if was_patrolling:
             # 巡航中：要清掉 PX4 手上那個還沒飛完的目標點，否則飛機會先飛完再停
             r = self._pause_here()
             if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
                 return self._finish(response, name, False, f"取消巡航被拒絕：{self._ack_text(r)}")
+            self._begin_task(name, 5.0, done_now=True)
             return self._finish(response, name, True, "已取消巡航，就地盤旋")
         r = self._send(VehicleCommand.VEHICLE_CMD_DO_SET_MODE,
                        p1=MODE_FLAG_CUSTOM, p2=MAIN_MODE_AUTO, p3=SUB_MODE_AUTO_LOITER)
         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
             return self._finish(response, name, False, f"切換盤旋被拒絕：{self._ack_text(r)}")
+        self._begin_task(name, 5.0, done_now=True)     # 切模式沒有「過程」，送出就算完成
         return self._finish(response, name, True, "已切換為盤旋（定點定高）")
 
     def _srv_land(self, request, response):
@@ -374,6 +502,9 @@ class DroneApi(Node):
             return self._finish(response, name, False, "沒有收到 PX4 的狀態，確認 agent 有連上")
         if not self._armed() or self.land.landed:
             return self._finish(response, name, False, "已經在地上")
+        # 進行中的任務（例如巡航）被降落打斷，要標成失敗，
+        # 否則 Node-RED 的「等待完成」會一直等一個永遠不會完成的任務
+        self._end_task(False, "被降落指令取消")
         if self._cancel_patrol("使用者按了降落"):
             # 先煞停再降落，否則 PX4 會先飛完當下那一段才開始降
             self._pause_here()
@@ -381,6 +512,7 @@ class DroneApi(Node):
         r = self._send(VehicleCommand.VEHICLE_CMD_NAV_LAND)
         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
             return self._finish(response, name, False, f"降落指令被拒絕：{self._ack_text(r)}")
+        self._begin_task(name, 120.0)
         return self._finish(response, name, True, "已開始降落")
 
     # -------------------------------------------------------------------------
@@ -477,11 +609,14 @@ class DroneApi(Node):
 
         # 新的巡航要蓋掉舊的：先確實停掉，不然兩條執行緒會輪流送不同的點
         self._cancel_patrol("收到新的巡航指令")
+        self._end_task(False, "被新的巡航指令取代")
 
         # 高度：0 代表維持現在的高度
         height = alt if alt != 0.0 else (self._altitude() or 0.0)
         alt_amsl = float(self.lpos.ref_alt) + height
 
+        # 每個點抓 30 秒，再加 60 秒裕度。逾時只是讓「等待完成」不要無限等。
+        self._begin_task(name, 60.0 + 30.0 * len(xs) * loops)
         self._patrol_stop.clear()
         self._patrol_info = {"active": True, "index": 0, "total": len(xs) * loops}
         self._patrol_thread = threading.Thread(
@@ -555,6 +690,8 @@ class DroneApi(Node):
     def _patrol_note(self, ok, message):
         """巡航是背景跑的，沒有服務回應可以用，所以結果寫進狀態和 log。"""
         self._last_cmd, self._last_ok, self._last_msg = "patrol", ok, message
+        if self._task["name"] == "patrol":
+            self._end_task(ok, message)
         if ok:
             self.get_logger().info(f"[patrol] {message}")
         else:
@@ -650,6 +787,7 @@ class DroneApi(Node):
         r = self._send(VehicleCommand.VEHICLE_CMD_DO_CHANGE_ALTITUDE, p1=alt_amsl)
         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
             return self._finish(response, name, False, f"調整高度被拒絕：{self._ack_text(r)}")
+        self._begin_task(name, 60.0, target=h)
         return self._finish(response, name, True, f"已送出：{now_note} → {h:.2f} m")
 
 

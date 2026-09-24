@@ -16,7 +16,10 @@ set -u
 # 都不用改檔案（正常點圖示時用的就是下面這兩個預設值）
 SERVICE="${DRONE_CONSOLE_SERVICE:-drone-nodered.service}"
 PORT="${DRONE_CONSOLE_PORT:-1880}"
-URL="http://localhost:$PORT"
+# 要開哪一頁：空的＝編輯器（給你組流程）、/dashboard＝儀表板（給操作的人）。
+# 兩個桌面圖示用的是同一支腳本，只差這個環境變數。
+PATH_SUFFIX="${DRONE_CONSOLE_PATH:-}"
+URL="http://localhost:$PORT$PATH_SUFFIX"
 WAIT_SEC=60
 
 notify() { command -v notify-send >/dev/null 2>&1 && notify-send -a "無人機控制台" "無人機控制台" "$1" || true; }

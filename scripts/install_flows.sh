@@ -13,8 +13,11 @@
 #      而且要在編輯器裡一個一個刪，非常痛苦（2026-09-18 實際踩到）。
 #      直接換掉流程檔就沒有這個問題，而且別人拿到這個專案也能一行指令搞定。
 #
-#  ⚠️ 這支會覆蓋 Node-RED 的 flows.json。覆蓋前一定先備份成 flows.json.bak.<日期時間>，
-#     所以你在編輯器裡改過的東西不會消失，只是要自己去備份檔撈回來。
+#  只換掉「本專案產生的四個分頁」（無人機控制、系統、任務、零件庫）和三個積木，
+#  **你自己新增的分頁會保留**（合併邏輯見 nodered/merge_flows.py）。
+#
+#  ⚠️ 但東西如果是加在「我們的分頁裡面」，會跟著那一頁被換掉。
+#     所以自己的任務請放在自己新增的分頁。每次更新前都會先備份成 flows.json.bak.<日期時間>。
 # =============================================================================
 set -e
 
@@ -42,11 +45,23 @@ if [ ! -f "$SRC" ]; then
 fi
 
 DST="$USER_DIR/flows.json"
+MERGE="$PKG_SRC/nodered/merge_flows.py"
+[ -f "$MERGE" ] || MERGE="$(ros2 pkg prefix drone_nodered 2>/dev/null)/share/drone_nodered/nodered/merge_flows.py"
 echo "來源： $SRC"
 echo "目標： $DST"
 
+# 先算出「合併後」的內容放到暫存檔，再比對要不要動作。
+# 合併＝我們的分頁用新的，使用者自己的分頁原封不動留著。
+NEW="$(mktemp)"
+trap 'rm -f "$NEW"' EXIT
+if [ -f "$DST" ]; then
+    python3 "$MERGE" "$SRC" "$DST" "$NEW" || { echo "✗ 合併失敗，沒有更動任何東西"; exit 1; }
+else
+    cp "$SRC" "$NEW"
+fi
+
 # 內容一樣就不用做事 —— 免得白白多一個備份檔，也免得白重啟服務
-if [ -f "$DST" ] && cmp -s "$SRC" "$DST"; then
+if [ -f "$DST" ] && cmp -s "$NEW" "$DST"; then
     echo "✓ 內容已經一樣，不需要更新"
     exit 0
 fi
@@ -79,7 +94,7 @@ if [ -f "$DST" ]; then
     cp -p "$DST" "$BAK"
     echo "  ✓ 舊的流程已備份： $BAK"
 fi
-cp "$SRC" "$DST"
+cp "$NEW" "$DST"
 echo "  ✓ 已更新 $DST"
 
 if [ "$WAS_ACTIVE" = 1 ]; then

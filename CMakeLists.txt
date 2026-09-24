@@ -18,6 +18,7 @@ install(PROGRAMS
   scripts/console_start.sh
   scripts/console_stop.sh
   scripts/install_flows.sh
+  scripts/install_dashboard.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 

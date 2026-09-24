@@ -73,7 +73,7 @@ remove_one drone-nodered.service
 echo "移除桌面圖示…"
 APPS_DIR="$HOME/.local/share/applications"
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
-for d in drone-nodered-start.desktop drone-nodered-stop.desktop; do
+for d in drone-nodered-start.desktop drone-nodered-dashboard.desktop drone-nodered-stop.desktop; do
     remove_desktop "$APPS_DIR/$d"
     remove_desktop "$DESKTOP_DIR/$d"
 done

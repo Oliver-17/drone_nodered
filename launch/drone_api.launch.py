@@ -27,6 +27,14 @@ def generate_launch_description():
                               description="起飛高度下限（公尺）"),
         DeclareLaunchArgument("max_takeoff_altitude", default_value="5.0",
                               description="起飛高度上限（公尺）。室內實機建議 1.5"),
+        # 看門狗：狀況不對自動降落。實機要依電池狀況調 battery_min
+        DeclareLaunchArgument("watchdog_enabled", default_value="true"),
+        DeclareLaunchArgument("battery_min", default_value="0.30",
+                              description="剩餘電量低於這個比例就自動降落（0~1）"),
+        DeclareLaunchArgument("altitude_margin_m", default_value="1.0",
+                              description="高度超過上限這麼多就算失控爬升"),
+        DeclareLaunchArgument("watchdog_debounce_s", default_value="1.0",
+                              description="異常要連續成立這麼久才動作，避免瞬間雜訊誤觸發"),
         Node(
             package="drone_nodered", executable="drone_api_node.py",
             name="drone_api_node", namespace=ns,
@@ -38,6 +46,14 @@ def generate_launch_description():
                     LaunchConfiguration("min_takeoff_altitude"), value_type=float),
                 "max_takeoff_altitude": ParameterValue(
                     LaunchConfiguration("max_takeoff_altitude"), value_type=float),
+                "watchdog_enabled": ParameterValue(
+                    LaunchConfiguration("watchdog_enabled"), value_type=bool),
+                "battery_min": ParameterValue(
+                    LaunchConfiguration("battery_min"), value_type=float),
+                "altitude_margin_m": ParameterValue(
+                    LaunchConfiguration("altitude_margin_m"), value_type=float),
+                "watchdog_debounce_s": ParameterValue(
+                    LaunchConfiguration("watchdog_debounce_s"), value_type=float),
             }],
             output="screen", emulate_tty=True,
         ),

@@ -1,0 +1,17 @@
+# Python 位元碼。import 這個套件的腳本時會自動產生，換一台電腦就失效，
+# 不需要（也不應該）進版控。
+__pycache__/
+*.py[cod]
+
+# colcon 的編譯產物。萬一有人在套件目錄裡跑 colcon build，
+# 會在這裡生出這三個目錄 —— 那是誤用（應該在 workspace 根目錄跑），
+# 但先擋住免得不小心提交進來。
+build/
+install/
+log/
+
+# 編輯器與系統檔
+.vscode/
+*.swp
+*~
+.DS_Store

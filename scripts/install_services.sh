@@ -119,7 +119,7 @@ echo
 echo "安裝桌面圖示…"
 APPS_DIR="$HOME/.local/share/applications"
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")"
-for d in drone-nodered-start.desktop drone-nodered-stop.desktop; do
+for d in drone-nodered-start.desktop drone-nodered-dashboard.desktop drone-nodered-stop.desktop; do
     # 應用程式目錄：會出現在「顯示應用程式」選單裡（不需要 trusted）
     install_desktop "$d" "$APPS_DIR" 0
     # 桌面：點兩下就能開

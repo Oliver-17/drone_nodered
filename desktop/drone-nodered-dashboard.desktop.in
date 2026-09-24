@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=無人機儀表板
+Comment=開啟操作畫面（按鈕和狀態，看不到流程）
+Exec=env DRONE_CONSOLE_PATH=/dashboard @PKG_SRC@/scripts/console_start.sh
+Icon=applications-science
+Terminal=false
+Categories=Development;
+Keywords=drone;nodered;dashboard;
