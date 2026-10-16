@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =============================================================================
+  hatchback_target —— 外觀是真車、尺寸是小模型車的追蹤目標
+
+  為什麼需要這個（而不是繼續用 magenta_target 的洋紅方塊）：
+      洋紅方塊不是任何真實物體，所有現成的 YOLO 權重都認不出來（實測全 0），
+      為它訓練出來的模型換個目標就失效、實機更無從沿用。
+      換成真車外觀之後，航拍資料集訓練的權重（VisDrone）直接就認得，
+      而且實機上換成任何一台真車也還是認得 —— 這才是用 YOLO 的意義。
+
+  為什麼尺寸要縮到 0.6 m 而不是用原本的 4 m：
+      VisDrone 是「高空航拍」資料集，訓練影像裡的車都很小。
+      實測它的信心值對「目標佔畫面多少」非常敏感：
+          佔 0.1~2%   → 0.87~0.90   ✓
+          佔 10%      → 0.47~0.68   ⚠️
+          佔 20% 以上 → 0            ✗ 完全失效
+      一台 4 m 真車在「俯角 67°、高度 3 m、站位 1.27 m」下會佔掉畫面 54%，
+      正好落在失效區。縮到 0.6 m 之後佔 1.6%，回到最佳區。
+      YOLO 看的是像素不是絕對尺寸，所以「0.6 m 的車在 1.27 m 外」和
+      「4 m 的車在 10 m 高空下」對它來說是同一件事。
+
+  縮放比怎麼來的：
+      原 mesh 長 4.001 m（y 軸，410 個頂點量出來的範圍 × 原 scale 0.0254）。
+      要 0.6 m → 0.0254 × 0.6/4.001 = 0.003809
+      縮放後：長 0.600 × 寬 0.321 × 高 0.235 m
+      （對照 magenta_target 是 0.6 × 0.4 × 0.15，車體大小幾乎一樣）
+
+  ⚠️ visual/collision 的 pose 不是 0：
+      ① yaw 1.5708 是原模型就有的 —— mesh 的長邊在 y，轉 90° 讓車長沿世界 x，
+         和 magenta_target 的擺法一致。
+      ② x = -0.0515 是補償 mesh 的原點偏移 —— mesh 的 y 範圍是 -92.29~65.24，
+         中心在 -13.525（不是 0），縮放加旋轉後會讓車的視覺中心偏到 x=+0.0515。
+         不補的話「模型座標」和「看到的車」差 5 cm，對 0.6 m 的車是 8% 的誤差，
+         會讓 target_world_node 算出來的位置系統性偏掉。
+      ③ z = 0.0017 讓車輪貼在 z=0（mesh 最低點是 -0.45 單位 = -0.0017 m）。
+
+  ⚠️ 貼圖路徑是改過的：Fuel 原始的 hatchback.mtl 裡，車身寫裸檔名
+     `map_Kd hatchback.png`（但圖其實放在 materials/textures/），輪子寫
+     `model://hatchback/materials/textures/wheels3.png`（指向別的模型名）。
+     兩種在這裡都載不到，所以貼圖複製了一份到 meshes/ 旁邊、路徑統一成裸檔名。
+
+  怎麼移動：和 magenta_target 完全一樣的 VelocityControl 外掛，
+      所以 move_target.py 加一個 model 選項就能原封不動推它。
+      ⚠️ 那個外掛的 angular.z 沒有作用（實測過），所以車只會平移不會轉向。
+============================================================================= -->
+<sdf version="1.9">
+  <model name="hatchback_target">
+    <link name="base">
+      <inertial>
+        <mass>2.0</mass>
+        <inertia><ixx>0.05</ixx><iyy>0.05</iyy><izz>0.05</izz></inertia>
+      </inertial>
+
+      <visual name="body">
+        <pose>-0.0515 0 0.0017 0 0 1.57079632679</pose>
+        <geometry>
+          <mesh>
+            <scale>0.003809 0.003809 0.003809</scale>
+            <uri>model://hatchback_target/meshes/hatchback.obj</uri>
+          </mesh>
+        </geometry>
+      </visual>
+
+      <!-- 碰撞體用簡化的 box，不用 mesh：
+           碰撞精度對這個目標毫無意義（它只是被 VelocityControl 推著走、
+           不跟任何東西互動），而 mesh 碰撞每個 step 都要算 410 個頂點。 -->
+      <collision name="collision">
+        <pose>0 0 0.1175 0 0 0</pose>
+        <geometry><box><size>0.600 0.321 0.235</size></box></geometry>
+      </collision>
+    </link>
+
+    <!-- 收到 cmd_vel 就直接設定模型速度。
+         z 給 0 等於「維持現在高度」，所以世界檔裡要生成在貼地的高度。 -->
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl">
+      <topic>/model/hatchback_target/cmd_vel</topic>
+    </plugin>
+  </model>
+</sdf>

@@ -5,6 +5,22 @@
 #  平常不用手動下指令，Node-RED 上的「開模擬／關模擬」按鈕就是在控制這個服務。
 #
 #  實機時完全用不到：PX4 是飛控板上的韌體、agent 在樹莓派上走序列埠。
+#
+#  ---------------------------------------------------------------------------
+#  ⚠️ 2026-10-12 退休：install_services.sh **預設不再安裝這個服務**
+#  ---------------------------------------------------------------------------
+#  Oliver 說舊地圖（空白世界）不用了，直接用倉庫就好，所以 Node-RED 的
+#  「系統」分頁只留一組按鈕、名稱就叫「開模擬」（指向 drone-warehouse.service）。
+#
+#  檔案刻意留著，要叫回來三行（按鈕寫在產生出來的 JSON 裡，
+#  install_flows.sh 不會自己重跑產生器，所以中間那行不能省）：
+#      bash scripts/install_services.sh --with-empty-sim
+#      python3 nodered/make_drone_basic.py --with-empty-sim
+#      bash scripts/install_flows.sh
+#
+#  它用到的東西也都還在：gz/worlds/empty.sdf、empty_target.sdf，
+#  以及 sim_all.launch.py 的 world 參數（預設值刻意維持 empty_target，
+#  那是這條封存路徑的入口；warehouse_all 一律明確傳 world:=warehouse）。
 # =============================================================================
 [Unit]
 Description=無人機模擬（XRCE agent + PX4 SITL + Gazebo）
@@ -16,6 +32,12 @@ After=graphical-session.target
 # 為什麼要有 —— Node-RED 的「全部關閉」只會停底座，沒有這行的話模擬會變孤兒，
 # Gazebo 留在背景吃顯卡，而且畫面上已經沒有任何地方可以關它了。
 PartOf=drone-nodered.service
+
+# ⚠️ Conflicts：和倉庫場景互斥（2026-10-08 新增）。
+#    兩個都會開 PX4 SITL ＋ Gazebo，同時跑的話兩套堆疊會互相干擾：
+#    兩個 drone_api_node 都提供 /MAV1/api/*（指令會落到不確定的那一個），
+#    而且搶 CPU。有了這行，systemd 啟動其中一個時會自動停掉另一個。
+Conflicts=drone-warehouse.service
 
 [Service]
 Type=simple

@@ -65,6 +65,22 @@ def generate_launch_description():
         DeclareLaunchArgument("max_takeoff_altitude", default_value="5.0",
                               description="起飛高度上限（公尺）。室內實機建議 1.5"),
 
+        # api/track 的搜尋環線用 map 座標，節點要靠這個換算成 PX4 本地 NED。
+
+        # 空字串 = 沒有這個資訊 → 帶搜尋環線的請求會被明確拒絕。
+
+        DeclareLaunchArgument("local_origin_map", default_value="",
+
+                              description='PX4 本地原點在 map 的座標，"x,y"。'
+
+                                          "要和 px4_bridge 的 odom_origin 一致"),
+
+        DeclareLaunchArgument("camera_pitch_deg", default_value="67.0",
+
+                              description="相機俯角（度）。api/track 的 "
+
+                                          "distance=0 用它算最佳跟隨距離"),
+
         DeclareLaunchArgument("rosbridge", default_value="true"),
         DeclareLaunchArgument("drone_api", default_value="true"),
         DeclareLaunchArgument("nodered", default_value="true"),
@@ -89,6 +105,13 @@ def generate_launch_description():
                 "target_system": LaunchConfiguration("target_system"),
                 "min_takeoff_altitude": LaunchConfiguration("min_takeoff_altitude"),
                 "max_takeoff_altitude": LaunchConfiguration("max_takeoff_altitude"),
+                # 場景參數（2026-10-08）。底座服務是「不知道場景」的，所以這兩個
+                # 由啟動的人注入 —— drone-nodered.service 的 ExecStart 帶進來，
+                # 值由 install_services.sh 從 warehouse_geometry.yaml 填。
+                # ⚠️ local_origin_map 必須和 px4_bridge 的 odom_origin 相同，
+                #    不一致時 api/track 的搜尋航點會整組平移且**不會報錯**。
+                "local_origin_map": LaunchConfiguration("local_origin_map"),
+                "camera_pitch_deg": LaunchConfiguration("camera_pitch_deg"),
             }.items(),
             condition=IfCondition(LaunchConfiguration("drone_api")),
         ),

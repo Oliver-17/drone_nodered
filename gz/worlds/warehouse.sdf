@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  === 這個檔案是產生出來的，不要手改 ===
+  來源：drone_nodered/scripts/gen_warehouse.py，改幾何請改那支再重跑。
+
+  warehouse：室內倉庫，給 Nav2 在貨架之間導航用。
+
+  佈局
+  ====
+        y=+12 ─────────────────────────────── 北牆
+        y=+7  ┌──┐  ┌──┐  ┌──┐  ┌──┐    ← 北向橫走道
+              │貨│  │貨│  │貨│  │貨│
+   起飛區     │架│  │架│  │架│  │架│      東側空地
+              │  │  │  │  │  │  │  │
+        y=-7  └──┘  └──┘  └──┘  └──┘    ← 南向橫走道
+     ★spawn
+        y=-12 ─────────────────────────────── 南牆
+
+  設計原則
+  ========
+  1. 貨架高 7 m，比飛行高度（約 3 m）高 —— 不放矮的、可飛越的東西。
+     「從上面飛過去」是地圖設計上的取巧，不是真的避障。
+  2. 走道寬 4.0 m 是算出來的，不是看起來順眼：
+     robot_radius 0.5 兩側吃 1.0 m、inflation_radius 1.0 兩側再吃 2.0 m
+     => 走道 3.0 m 中間只剩一條線，4.0 m 才有 1.0 m 的零成本帶。
+  3. 飛機 spawn 在 (-14, -9)，到中間走道沒有直線可走 ——
+     直線在 x=-9.2 附近就穿進第一排貨架。
+     這就是 Nav2 真的有用的理由。
+
+  座標系：ENU（x 東、y 北、z 上）—— 見下方 <world_frame_orientation>。
+  PX4 內部是 NED，前兩軸對調，寫任何座標前先確認自己在哪個系統。
+
+  外框：x [-18.2, 18.2]  y [-12.2, 12.2]   (36 x 24 m)
+  貨架：4 排，走道中心 x = -5.6, +0.0, +5.6
+  目標車巡迴：x = +0.0 的走道，y 從 -6 到 +6
+-->
+<sdf version="1.9">
+  <world name="warehouse">
+    <physics type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <grid>false</grid>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <!-- 影子關掉：倉庫裡四排高貨架會投下大片陰影，俯視時很難看清楚走道，
+           而且陰影對 Nav2 完全沒有影響（它只讀靜態地圖）。要開回來改成 true，
+           連同下面光源的 cast_shadows 一起。 -->
+      <shadows>false</shadows>
+    </scene>
+
+    <!-- PX4 的 GPS 模擬需要一個原點經緯度；world_frame_orientation 決定
+         SDF 的 <pose> 怎麼解讀。數值沿用 PX4 內建 world。 -->
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg>8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+
+    <light name="sunUTC" type="directional">
+      <pose>0 0 500 0 -0 0</pose>
+      <cast_shadows>false</cast_shadows>
+      <intensity>1</intensity>
+      <direction>0.001 0.625 -0.78</direction>
+      <diffuse>0.904 0.904 0.904 1</diffuse>
+      <specular>0.271 0.271 0.271 1</specular>
+      <attenuation>
+        <range>2000</range><linear>0</linear><constant>1</constant><quadratic>0</quadratic>
+      </attenuation>
+      <spot><inner_angle>0</inner_angle><outer_angle>0</outer_angle><falloff>0</falloff></spot>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>1 1</size></plane></geometry>
+          <surface><friction><ode/></friction><bounce/><contact/></surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>200 200</size></plane></geometry>
+          <material>
+            <ambient>0.55 0.55 0.58 1</ambient>
+            <diffuse>0.62 0.62 0.65 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== 外牆與貨架 ===== -->
+    <!-- 西牆（起飛區那一側） -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-18.0 0.0 4.0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.5 24.5 8.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.5 24.5 8.0</size></box></geometry>
+          <material>
+            <ambient>0.30 0.30 0.35 1</ambient>
+            <diffuse>0.65 0.65 0.70 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 東牆 -->
+    <model name="wall_east">
+      <static>true</static>
+      <pose>18.0 0.0 4.0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.5 24.5 8.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.5 24.5 8.0</size></box></geometry>
+          <material>
+            <ambient>0.30 0.30 0.35 1</ambient>
+            <diffuse>0.65 0.65 0.70 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 南牆（南向橫走道的外緣） -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0.0 -12.0 4.0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>36.5 0.5 8.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>36.5 0.5 8.0</size></box></geometry>
+          <material>
+            <ambient>0.30 0.30 0.35 1</ambient>
+            <diffuse>0.65 0.65 0.70 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 北牆（北向橫走道的外緣） -->
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0.0 12.0 4.0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>36.5 0.5 8.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>36.5 0.5 8.0</size></box></geometry>
+          <material>
+            <ambient>0.30 0.30 0.35 1</ambient>
+            <diffuse>0.65 0.65 0.70 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 第 1 排貨架，x 中心 -8.4 -->
+    <model name="shelf_1">
+      <static>true</static>
+      <pose>-8.399999999999999 0.0 3.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.6 14.0 7.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.6 14.0 7.0</size></box></geometry>
+          <material>
+            <ambient>0.35 0.22 0.08 1</ambient>
+            <diffuse>0.80 0.52 0.22 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 第 2 排貨架，x 中心 -2.8 -->
+    <model name="shelf_2">
+      <static>true</static>
+      <pose>-2.8 0.0 3.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.6 14.0 7.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.6 14.0 7.0</size></box></geometry>
+          <material>
+            <ambient>0.35 0.22 0.08 1</ambient>
+            <diffuse>0.80 0.52 0.22 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 第 3 排貨架，x 中心 +2.8 -->
+    <model name="shelf_3">
+      <static>true</static>
+      <pose>2.8 0.0 3.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.6 14.0 7.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.6 14.0 7.0</size></box></geometry>
+          <material>
+            <ambient>0.35 0.22 0.08 1</ambient>
+            <diffuse>0.80 0.52 0.22 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 第 4 排貨架，x 中心 +8.4 -->
+    <model name="shelf_4">
+      <static>true</static>
+      <pose>8.399999999999999 0.0 3.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.6 14.0 7.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.6 14.0 7.0</size></box></geometry>
+          <material>
+            <ambient>0.35 0.22 0.08 1</ambient>
+            <diffuse>0.80 0.52 0.22 1</diffuse>
+            <specular>0.2 0.2 0.2 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- 屋頂：白色半透明（alpha 0.25）。下緣 8.0 m，和外牆頂齊平。
+         ⚠️ 刻意不在 RECTS 裡 —— 它進 SDF 但不進 Nav2 的 2D 地圖。 -->
+    <model name="roof">
+      <static>true</static>
+      <pose>0 0 8.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>36.5 24.5 0.2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <transparency>0.75</transparency>
+          <geometry><box><size>36.5 24.5 0.2</size></box></geometry>
+          <material>
+            <ambient>1 1 1 0.25</ambient>
+            <diffuse>1 1 1 0.25</diffuse>
+            <specular>0.1 0.1 0.1 0.25</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ===== 目標車（hatchback）=====
+         VelocityControl 讓它可以用 /model/hatchback_target/cmd_vel 被推動
+         （move_target.py 在做這件事，換目標要加 model 選項）。
+         ⚠️ 那個外掛的 angular.z 完全沒有作用（實測 0.5 rad/s 連續 21 秒，
+            yaw 只變 0.00003），而 linear 是**世界座標**。所以車子只會平移、
+            不會轉向 —— 在走道裡上下跑的時候看起來像側滑，那不是 bug。 -->
+    <include>
+      <uri>model://hatchback_target</uri>
+      <name>hatchback_target</name>
+      <pose>0.0 -6.0 0.0 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

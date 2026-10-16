@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =============================================================================
+  magenta_target —— 追蹤測試用的「會動的目標」
+
+  為什麼是一個洋紅色方塊，不是真的車子或人：
+      空白世界只有灰色地板和白色無人機，洋紅在 HSV 色彩空間裡是唯一解，
+      顏色偵測幾乎不可能誤判。目標越單純，出問題時越容易分辨是
+      「偵測寫錯」還是「3D 換算寫錯」—— 除錯階段這比擬真重要得多。
+      之後換成 YOLO 時，這個模型不用改（只是偵測方式換掉）。
+
+  怎麼移動：
+      掛 VelocityControl 外掛，訂閱 /model/magenta_target/cmd_vel。
+      發一個速度指令它就照著走，不需要輪子、馬達、也不會和物理引擎打架。
+      來回直線的節奏由 scripts/move_target.py 控制。
+
+  尺寸 0.6 × 0.4 × 0.25 m：和 TurtleBot 差不多，從 3 公尺高空看下去
+  在 640×480 的深度影像裡大約 30–60 像素，足夠偵測又不會佔滿畫面。
+============================================================================= -->
+<sdf version="1.9">
+  <model name="magenta_target">
+    <link name="base">
+      <inertial>
+        <mass>2.0</mass>
+        <inertia><ixx>0.05</ixx><iyy>0.05</iyy><izz>0.05</izz></inertia>
+      </inertial>
+
+      <!-- 車體：深灰，不參與顏色偵測，只是讓它看起來像一台車 -->
+      <visual name="body">
+        <geometry><box><size>0.6 0.4 0.15</size></box></geometry>
+        <material>
+          <ambient>0.25 0.25 0.28 1</ambient>
+          <diffuse>0.25 0.25 0.28 1</diffuse>
+        </material>
+      </visual>
+
+      <!-- 洋紅方塊：偵測要抓的就是這個。
+           emissive 給一點自發光，讓它在陰影下顏色也不會偏太多 —— 模擬裡沒有
+           曝光自動調整，色相穩定偵測才穩。 -->
+      <visual name="marker">
+        <pose>0 0 0.2 0 0 0</pose>
+        <geometry><box><size>0.3 0.3 0.25</size></box></geometry>
+        <material>
+          <ambient>0.8 0 0.6 1</ambient>
+          <diffuse>1.0 0 0.75 1</diffuse>
+          <specular>0.2 0.2 0.2 1</specular>
+          <emissive>0.35 0 0.26 1</emissive>
+        </material>
+      </visual>
+
+      <collision name="collision">
+        <geometry><box><size>0.6 0.4 0.15</size></box></geometry>
+      </collision>
+    </link>
+
+    <!-- 收到 cmd_vel 就直接設定模型速度。
+         注意：它會連 z 方向也一起設定，所以 z 給 0 等於「維持現在高度」，
+         模型要生成在貼近地面的高度（世界檔裡是 0.1 m）。 -->
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl">
+      <topic>/model/magenta_target/cmd_vel</topic>
+    </plugin>
+  </model>
+</sdf>

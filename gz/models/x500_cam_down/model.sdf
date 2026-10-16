@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =============================================================================
+  x500_cam_down —— x500 + RGB/深度相機，裝在機腹支架上、俯角 67°
+
+  和 x500_depth_tilt 的差別（那支留著給舊的追蹤 demo 用，不要動它）：
+
+    項目        x500_depth_tilt      x500_cam_down（這支）
+    相機位置    base_link 上方 .242   base_link **下方** .18（支架）
+    俯角        45°  (0.785 rad)      67°  (1.1694 rad)
+    RGB 解析度  640 x 360 (16:9)      640 x 480 (4:3)
+
+  === 為什麼俯角是 67° ===
+  盲區為零的條件是「視野下緣剛好打到正下方」：
+      最小俯角 = 90° − VFOV/2
+  VFOV 由 HFOV 和長寬比決定：VFOV = 2·atan(tan(HFOV/2) × 高/寬)
+      640x360：VFOV 42.3° → 最小俯角 68.9°
+      640x480：VFOV 54.5° → 最小俯角 62.7°     ← 所以解析度也要一起改
+  67° = 62.7° 再加約 4° 的安全邊際（正下方那條射線壓在影像最下緣時，
+  鏡頭畸變最大、也最容易被機構擋到，不要剛好用到邊）。
+
+  在 3 m 飛行高度：盲區 0、前視約 3.8 m、中心橫寬約 5 m（倉庫走道寬 4 m，蓋得滿）。
+
+  === 為什麼解析度從 640x360 改成 640x480 ===
+  16:9 把垂直視野裁掉了，VFOV 只有 42.3°。改成 4:3 之後 VFOV 變 54.5°，
+  最小俯角往下降 6°，3 m 高度的前視從 2.73 m 變成 4.21 m（+54%），
+  而水平 FOV 不變、目標的像素寬幾乎沒掉（72 → 69 px）。
+  純粹是「不要把垂直視野丟掉」，不是加大鏡頭。
+
+  === 為什麼要裝在機腹、而且要支架 ===
+  俯角一接近正下方，裝在機身上方的相機就會拍到自己的機體。
+  PX4 自己的 x500_mono_cam_down 就是這樣（相機在 base_link 上方 .10、俯角 90°）——
+  實際算過，機身離光軸 0.0°，整個機殼在畫面正中央。
+
+  x500 的幾何（查自 x500_base/model.sdf，相對 base_link）：
+      旋翼      z = +0.06        半徑 0.246（槳尖約 0.386）
+      機身      z = −0.018~+0.032   0.3536 見方
+      直立腳    z = −0.024~−0.222   y = ±0.062~±0.134
+      腳架橫桿  z = −0.227~−0.212   y = ±0.132、x = ±0.125
+      → 全機最低點 z = −0.227，停在地上時 base_link 離地 0.24 m
+
+  相機放在 (.12, 0, −.18) 時：
+      機體離光軸最近 70.2°（腳架），而 640x480 的**對角**半視角只有 40.7°
+      → 餘裕 30°，任何角落都拍不到機體
+      鏡頭離地 0.060 m，比腳架底高 4.7 cm → 降落時腳架先著地，鏡頭有保護
+
+  ⚠️ 不要把相機再往下移。−0.227 就會變成全機最低點，降落先撞鏡頭。
+
+  === 感測器名稱 ===
+  刻意和 PX4 / x500_depth_tilt 一致（IMX214、StereoOV7251、topic depth_camera），
+  這樣 vision.launch.py 的 topic 路徑只要換模型名字，結構不用改。
+
+  ⚠️ 相機俯角改了的話，**三個地方**要一起改（不是兩個）：
+        這個檔案的 camera_link / CameraJoint 的 <pose>
+        launch/vision.launch.py 的 camera_pitch 參數
+        scripts/target_world_node.py 的 camera_pitch_deg 預設
+============================================================================= -->
+<sdf version='1.9'>
+  <model name='x500_cam_down'>
+    <self_collide>false</self_collide>
+    <include merge='true'>
+      <uri>x500</uri>
+    </include>
+
+    <!-- 支架：從機身底（z=−0.018）垂到相機（z=−0.18）。
+         獨立一個 link 而不是放進 camera_link 的 visual —— camera_link 整個
+         轉了 67°，支架跟著轉就會變成斜的。這個 link 不旋轉。
+         質量 0.02 kg：x500 約 2 kg，加上相機的 0.05 共 3.5%，對懸停推力的
+         影響可以忽略，但不要給 0（Gazebo 對零質量的 link 會抱怨）。 -->
+    <link name="cam_stand_link">
+      <pose relative_to="base_link">.12 0 -.099 0 0 0</pose>
+      <inertial>
+        <mass>0.02</mass>
+        <inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>1e-5</izz></inertia>
+      </inertial>
+      <visual name="stand_visual">
+        <geometry><box><size>0.02 0.02 0.162</size></box></geometry>
+        <material>
+          <ambient>0.15 0.15 0.15 1</ambient><diffuse>0.25 0.25 0.25 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <joint name="CamStandJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>cam_stand_link</child>
+    </joint>
+
+    <link name="camera_link">
+      <!-- 1.1694 rad = 67°。往下為正（繞 y 軸）。 -->
+      <pose relative_to="base_link">.12 0 -.18 0 1.1694 0</pose>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>1e-5</izz></inertia>
+      </inertial>
+      <visual name="camera_visual">
+        <geometry><box><size>0.03 0.09 0.02</size></box></geometry>
+        <material>
+          <ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse>
+        </material>
+      </visual>
+
+      <sensor name="IMX214" type="camera">
+        <gz_frame_id>camera_link</gz_frame_id>
+        <!-- 光心和 camera_link 原點重合（x500_depth_tilt 沿用了 OakD-Lite 的
+             內部偏移 .01233 −.03 .01878）。這裡歸零，target_world_node 的
+             幾何推算就不用再扣那個偏移。RGB 和深度同一個 pose，兩者對齊。 -->
+        <pose>0 0 0 0 0 0</pose>
+        <camera>
+          <horizontal_fov>1.204</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>100</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>15</update_rate>
+        <visualize>true</visualize>
+      </sensor>
+
+      <sensor name="StereoOV7251" type="depth_camera">
+        <gz_frame_id>camera_link</gz_frame_id>
+        <pose>0 0 0 0 0 0</pose>
+        <camera>
+          <horizontal_fov>1.274</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R_FLOAT32</format>
+          </image>
+          <clip>
+            <near>0.2</near>
+            <far>19.1</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>15</update_rate>
+        <visualize>true</visualize>
+        <topic>depth_camera</topic>
+      </sensor>
+    </link>
+
+    <joint name="CameraJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>camera_link</child>
+    </joint>
+  </model>
+</sdf>

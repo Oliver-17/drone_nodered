@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =============================================================================
+  empty_target.sdf —— 空白世界 + 一個會移動的洋紅目標
+
+  和 empty.sdf 的唯一差別就是多了 magenta_target 這個模型。
+  其他（重力、磁場、經緯度、地面）完全照抄 —— 磁偏角和預檢參數才會一致。
+
+  ⚠️ world name 一定要和檔名一致（empty_target.sdf ↔ empty_target），
+     PX4 的 px4-rc.gzsim 是用 PX4_GZ_WORLD 這個名字去找世界的。
+
+  用法：
+      WORLD=empty_target SIM_MODEL=x500_depth \
+          ~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh
+      python3 ~/ros2_ws/src/drone_nodered/scripts/move_target.py   # 讓目標開始來回走
+============================================================================= -->
+<sdf version="1.9">
+  <world name="empty_target">
+    <physics type="ode">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>250</real_time_update_rate>
+    </physics>
+    <gravity>0 0 -9.8</gravity>
+    <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
+    <atmosphere type="adiabatic"/>
+    <scene>
+      <grid>false</grid>
+      <ambient>0.4 0.4 0.4 1</ambient>
+      <background>0.7 0.7 0.7 1</background>
+      <shadows>true</shadows>
+    </scene>
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>1 1</size>
+            </plane>
+          </geometry>
+          <surface>
+            <friction>
+              <ode/>
+            </friction>
+            <bounce/>
+            <contact/>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>500 500</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+            <specular>0.8 0.8 0.8 1</specular>
+          </material>
+        </visual>
+        <pose>0 0 0 0 -0 0</pose>
+        <inertial>
+          <pose>0 0 0 0 -0 0</pose>
+          <mass>1</mass>
+          <inertia>
+            <ixx>1</ixx>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyy>1</iyy>
+            <iyz>0</iyz>
+            <izz>1</izz>
+          </inertia>
+        </inertial>
+        <enable_wind>false</enable_wind>
+      </link>
+      <pose>0 0 0 0 -0 0</pose>
+      <self_collide>false</self_collide>
+    </model>
+    <light name="sunUTC" type="directional">
+      <pose>0 0 500 0 -0 0</pose>
+      <cast_shadows>true</cast_shadows>
+      <intensity>1</intensity>
+      <direction>0.001 0.625 -0.78</direction>
+      <diffuse>0.904 0.904 0.904 1</diffuse>
+      <specular>0.271 0.271 0.271 1</specular>
+      <attenuation>
+        <range>2000</range>
+        <linear>0</linear>
+        <constant>1</constant>
+        <quadratic>0</quadratic>
+      </attenuation>
+      <spot>
+        <inner_angle>0</inner_angle>
+        <outer_angle>0</outer_angle>
+        <falloff>0</falloff>
+      </spot>
+    </light>
+    <spherical_coordinates>
+      <surface_model>EARTH_WGS84</surface_model>
+      <world_frame_orientation>ENU</world_frame_orientation>
+      <latitude_deg>47.397971057728974</latitude_deg>
+      <longitude_deg> 8.546163739800146</longitude_deg>
+      <elevation>0</elevation>
+    </spherical_coordinates>
+
+    <!-- 追蹤目標。
+         z = 0.075 = 車體高度的一半，剛好貼地。
+         ⚠️ 不能設 0.1：那會讓模型和地面重疊 2.5 cm，物理引擎用一個大脈衝把它推開，
+            2026-09-28 實測開場就被彈走 0.8 m。
+         x = 3：起飛點前方 3 公尺。 -->
+    <include>
+      <uri>model://magenta_target</uri>
+      <name>magenta_target</name>
+      <pose>3 0 0.075 0 0 0</pose>
+    </include>
+  </world>
+</sdf>

@@ -6,6 +6,10 @@
 #      ~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh
 #      HEADLESS=1 ~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh     # 不開視窗
 #      FOREGROUND=1 ~/ros2_ws/src/drone_nodered/scripts/start_empty_sitl.sh   # 前景模式，Ctrl+C 收乾淨
+#      WORLD=empty_target SIM_MODEL=x500_depth ~/…/start_empty_sitl.sh         # 視覺追蹤用的場景
+#          （這個世界有洋紅目標，腳本會自動讓它來回走；TARGET_SPEED=0 可以關掉）
+#      WORLD=warehouse ~/…/start_empty_sitl.sh                                  # 倉庫（貨架 + Nav2）
+#          （飛機自動生成在西南角 -14,-9；用 SPAWN="x,y" 可以覆寫）
 #
 #  開完之後（另開終端）：
 #      MicroXRCEAgent udp4 -p 8888
@@ -45,12 +49,31 @@ fi
 # 世界檔的位置：從原始碼目錄執行時在 <pkg>/gz/worlds；
 # 從安裝目錄（install/lib/drone_nodered）執行時，往上一層找不到，改問 ROS 2 套件路徑。
 WORLDS_DIR="$PKG_DIR/gz/worlds"
-if [ ! -f "$WORLDS_DIR/empty.sdf" ]; then
+if [ ! -f "$WORLDS_DIR/${WORLD:-empty}.sdf" ]; then
     WORLDS_DIR="$(ros2 pkg prefix drone_nodered 2>/dev/null)/share/drone_nodered/gz/worlds"
 fi
-if [ ! -f "$WORLDS_DIR/empty.sdf" ]; then
-    echo "找不到 empty.sdf（試過 $PKG_DIR/gz/worlds 和安裝目錄）"
+if [ ! -f "$WORLDS_DIR/${WORLD:-empty}.sdf" ]; then
+    echo "找不到 ${WORLD:-empty}.sdf（試過 $PKG_DIR/gz/worlds 和安裝目錄）"
     exit 1
+fi
+
+# 模型目錄同理。⚠️ 這個備援本來漏掉了（2026-09-28）：從安裝目錄跑的時候
+#   目標車的 model://magenta_target 和自製機體都找不到，Gazebo 世界根本建不起來，
+#   症狀是「逾時（90s）：Gazebo 世界 empty_target 已建立」，看不出是路徑問題。
+MODELS_DIR="$PKG_DIR/gz/models"
+if [ ! -d "$MODELS_DIR" ]; then
+    MODELS_DIR="$(ros2 pkg prefix drone_nodered 2>/dev/null)/share/drone_nodered/gz/models"
+fi
+if [ ! -d "$MODELS_DIR" ]; then
+    echo "找不到 gz/models（試過 $PKG_DIR/gz/models 和安裝目錄）"
+    exit 1
+fi
+
+# config 目錄同理（放 <世界>_geometry.yaml，由 gen_warehouse.py 產生）。
+# 這裡不當成硬性需求 —— 只有 warehouse 有幾何檔，empty / empty_target 沒有。
+CONFIG_DIR="$PKG_DIR/config"
+if [ ! -d "$CONFIG_DIR" ]; then
+    CONFIG_DIR="$(ros2 pkg prefix drone_nodered 2>/dev/null)/share/drone_nodered/config"
 fi
 
 # --- 強制 Gazebo 走 NVIDIA 獨顯（照抄 start_arena_sitl.sh）-----------------------
@@ -80,18 +103,58 @@ export GZ_IP=127.0.0.1
 # shellcheck disable=SC1091
 source "$BUILD_DIR/rootfs/gz_env.sh"
 export PX4_GZ_WORLDS="$WORLDS_DIR"
-# ⚠️ 必須和 empty.sdf 裡的 <world name="empty"> 一致（原因見 empty.sdf 檔頭）
-export PX4_GZ_WORLD=empty
+# 世界檔裡的 <uri>model://magenta_target</uri> 要靠這條路徑才找得到。
+# 接在後面而不是覆寫：PX4 自己的模型（x500、OakD-Lite）還是要能找到。
+export GZ_SIM_RESOURCE_PATH="$GZ_SIM_RESOURCE_PATH:$MODELS_DIR"
+# ⚠️ 必須和世界檔裡的 <world name="…"> 一致（原因見 empty.sdf 檔頭）
+#    WORLD=empty_target → 空白世界 + 一個會移動的洋紅目標（視覺追蹤測試用）
+export PX4_GZ_WORLD="${WORLD:-empty}"
 
 NAME="MAV1"
 INSTANCE=0
-# 空白世界沒有東西要閃，直接放在世界原點
-POSE="0,0"
+# 飛機生成的位置（"x,y"，世界 ENU 座標）。
+#   空白世界沒有東西要閃，放世界原點就好 → 預設 "0,0"
+#   warehouse 有貨架，要放在西南角的起飛區 → 這支腳本依世界名給預設值
+# ⚠️ 這個值和 Nav2 的 odom_origin 必須一致 —— PX4 的原點是「生成位置」而不是
+#    世界原點，不一致的話 map 座標會整個平移，而且**不會報錯**。
+#    warehouse_all.launch.py 會把同一組值傳給 px4_bridge 的 odom_origin。
+#
+# 2026-10-07（L1）：原本這裡寫死 warehouse) DEFAULT_POSE="-14,-9"，
+# 而 gen_warehouse.py 裡也有一份 SPAWN = (-14.0, -9.0)。兩份要是漂開，
+# 地圖會平移而且沒有任何錯誤訊息。改成讀產生出來的幾何檔，
+# 讓 gen_warehouse.py 成為唯一來源。
+GEOM="$CONFIG_DIR/${WORLD:-empty}_geometry.yaml"
+if [ -f "$GEOM" ]; then
+    # 只為了讀兩個數字而要求 PyYAML 不值得，而 sed 對這個固定格式夠可靠
+    #（檔案是產生的，格式不會變）。讀不到就讓 DEFAULT_POSE 留空往下走，
+    # 由後面的檢查報錯 —— 不要默默用 0,0，那正是「靜默平移」。
+    DEFAULT_POSE="$(sed -n 's/^spawn: *\[ *\([-0-9.]*\) *, *\([-0-9.]*\) *\].*/\1,\2/p' "$GEOM")"
+    if [ -z "$DEFAULT_POSE" ]; then
+        echo "✗ $GEOM 裡讀不到 spawn —— 請重跑 gen_warehouse.py"
+        exit 1
+    fi
+    echo "生成位置來自 $(basename "$GEOM")： $DEFAULT_POSE"
+else
+    # 沒有幾何檔的世界（empty / empty_target）放世界原點
+    DEFAULT_POSE="0,0"
+fi
+POSE="${SPAWN:-$DEFAULT_POSE}"
 # PX4_SIM_MODEL 而不是 PX4_GZ_MODEL：後者自 v1.15 起已廢棄，設了沒有作用
-SIM_MODEL="x500"
+#   x500        內建機體，沒有相機（預設）
+#   x500_depth  x500 + OakD-Lite（RGB 1920×1080 + 深度 640×480），視覺任務用
+SIM_MODEL="${SIM_MODEL:-x500}"
+# 機體模型：本套件裡有同名的就用本套件的，否則用 PX4 自己的。
+# ⚠️ PX4 生成機體時是直接組 file://$PX4_GZ_MODELS/<名稱>/model.sdf（px4-rc.gzsim:137），
+#    不會去查 GZ_SIM_RESOURCE_PATH —— 所以自製機體一定要改這個變數才找得到。
+#    模型內部的 <uri>x500</uri>、model://OakD-Lite 仍然靠 GZ_SIM_RESOURCE_PATH 解析，
+#    那裡還留著 PX4 的模型目錄，所以照樣找得到。
+if [ -f "$MODELS_DIR/$SIM_MODEL/model.sdf" ]; then
+    export PX4_GZ_MODELS="$MODELS_DIR"
+fi
 
 echo "世界： $PX4_GZ_WORLDS/$PX4_GZ_WORLD.sdf"
 echo "機體： $PX4_GZ_MODELS/$SIM_MODEL/model.sdf"
+echo "生成位置： $POSE  （Nav2 的 odom_origin 要用同一組值）"
 
 wait_for() {
     local desc="$1" timeout="$2"; shift 2
@@ -108,7 +171,7 @@ wait_for() {
     return 0
 }
 
-world_is_up()       { gz topic -l 2>/dev/null | grep -qE "/world/empty/clock"; }
+world_is_up()       { gz topic -l 2>/dev/null | grep -qE "/world/$PX4_GZ_WORLD/clock"; }
 instance_is_ready() { grep -q "uxrce_dds_client.*vehicle_local_position" "$1"; }
 
 if ! pgrep -x MicroXRCEAgent >/dev/null 2>&1; then
@@ -177,6 +240,8 @@ stop_sim() {
     targets="$(gz_leftovers | tr '\n' ' ')"
     echo "  PX4 PID $PX4_PID，子程序： ${kids:-（無）}"
 
+    # 目標移動的腳本也是我們開的，一起收
+    [ -n "${TARGET_PID:-}" ] && kill "$TARGET_PID" 2>/dev/null || true
     kill "$PX4_PID" 2>/dev/null || true
     for p in $kids $targets; do
         kill "$p" 2>/dev/null || true
@@ -233,7 +298,7 @@ if [ -n "${FOREGROUND:-}" ]; then
     trap stop_sim INT TERM
 fi
 
-wait_for "Gazebo 世界 empty 已建立" 90 world_is_up
+wait_for "Gazebo 世界 $PX4_GZ_WORLD 已建立" 90 world_is_up
 wait_for "$NAME 已連上 XRCE Agent" "$WAIT_AGENT" instance_is_ready "$WORK_DIR/out.log" || true
 
 if fix_preflight_params "$INSTANCE"; then
@@ -244,9 +309,76 @@ fi
 
 echo
 echo "=================================================="
-echo " 就緒，世界： empty（單機 $NAME）"
+echo " 就緒，世界： $PX4_GZ_WORLD（$SIM_MODEL，單機 $NAME）"
 echo "=================================================="
 echo "log： $WORK_DIR/out.log"
+
+# --- 目標自動開始移動 ----------------------------------------------------------------
+# 世界裡有洋紅目標時就自動讓它走，不用另外開一個終端。
+# 為什麼不做在 Gazebo 外掛裡：來回要有「走多久換方向」的邏輯，
+# 寫在外掛裡要重編 Gazebo；放在這裡改速度距離只要改參數。
+TARGET_PID=""
+# 世界裡是哪一種目標？洋紅方盒和真車外觀的模型名稱不同，而 move_target.py
+# 要用 --model 指名推哪一台。
+# ⚠️ 2026-10-15：原本這裡寫死 grep "magenta_target"，所以把世界切成真車版之後
+#    target:=true 完全不生效（車永遠不動，而且一聲不吭）。
+TARGET_MODEL=""
+if grep -q "hatchback_target" "$WORLDS_DIR/$PX4_GZ_WORLD.sdf" 2>/dev/null; then
+    TARGET_MODEL="hatchback_target"
+elif grep -q "magenta_target" "$WORLDS_DIR/$PX4_GZ_WORLD.sdf" 2>/dev/null; then
+    TARGET_MODEL="magenta_target"
+fi
+if [ "${TARGET_SPEED:-0.4}" != "0" ] && [ -n "$TARGET_MODEL" ]; then
+    # 用「這支腳本自己所在的目錄」找 move_target.py —— 從原始碼跑和從 install 目錄跑
+    # 兩種情況都對（install 時兩支都在 lib/drone_nodered 底下）
+    # 預設繞圈：目標一直在遠離，飛機才會持續追。直線來回時目標會停、也容易掉出畫面。
+    # warehouse 例外：場地裡有貨架，繞圈會直接撞進去。
+    #   2026-10-08 起預設改成 loop —— 繞一排貨架轉圈。
+    #   為什麼不是原本的 aisle（走道內南北來回）：來回的路線是一條線段，
+    #   飛機只要進到那條走道就一直看得到車，「搜尋」沒有難度。
+    #   繞圈之後車會跑到貨架另一側（視線被貨架擋住），飛機必須也繞過去才找得到。
+    case "$PX4_GZ_WORLD" in
+        warehouse) DEFAULT_TARGET_MODE="loop" ;;
+        *)         DEFAULT_TARGET_MODE="circle" ;;
+    esac
+    TM="${TARGET_MODE:-$DEFAULT_TARGET_MODE}"
+
+    # loop 模式的航點從幾何檔讀（gen_warehouse.py 產生，自我檢查⑥驗過不會撞貨架）。
+    # 轉成 move_target.py 要的 "x1,y1;x2,y2;…" 格式。
+    LOOP_ARG=""
+    if [ "$TM" = "loop" ]; then
+        if [ ! -f "$GEOM" ]; then
+            echo "✗ loop 模式需要 $GEOM —— 請先跑 gen_warehouse.py"
+            exit 1
+        fi
+        LOOP_ARG="$(sed -n 's/^target_loop: *\[\(.*\)\].*/\1/p' "$GEOM" \
+                    | sed 's/\] *, *\[/;/g; s/\[//g; s/\]//g; s/ //g')"
+        if [ -z "$LOOP_ARG" ]; then
+            echo "✗ $GEOM 裡讀不到 target_loop —— 請重跑 gen_warehouse.py"
+            exit 1
+        fi
+    fi
+
+    "$(dirname "${BASH_SOURCE[0]}")/move_target.py" --mode "$TM" \
+        --model "$TARGET_MODEL" \
+        --speed "${TARGET_SPEED:-0.4}" --radius "${TARGET_RADIUS:-2.5}" \
+        --length "${TARGET_LENGTH:-3}" \
+        --y-min "${TARGET_Y_MIN:--6}" --y-max "${TARGET_Y_MAX:-6}" \
+        --world "$PX4_GZ_WORLD" --loop "$LOOP_ARG" \
+        > "$WORK_DIR/target.log" 2>&1 &
+    TARGET_PID=$!
+    case "$TM" in
+        loop)
+            echo "目標移動（$TARGET_MODEL）： loop、速度 ${TARGET_SPEED:-0.4} m/s、航點 $LOOP_ARG（log： $WORK_DIR/target.log）"
+            ;;
+        aisle)
+            echo "目標移動（$TARGET_MODEL）： aisle、速度 ${TARGET_SPEED:-0.4} m/s、y ${TARGET_Y_MIN:--6} ~ ${TARGET_Y_MAX:-6}（log： $WORK_DIR/target.log）"
+            ;;
+        *)
+            echo "目標移動： $TM、速度 ${TARGET_SPEED:-0.4} m/s、半徑 ${TARGET_RADIUS:-2.5} m（log： $WORK_DIR/target.log）"
+            ;;
+    esac
+fi
 
 if [ -n "${FOREGROUND:-}" ]; then
     echo "停止： 按 Ctrl+C（前景模式，會自己收掉 PX4 和 Gazebo；trap 在 PX4 啟動時就裝好了）"

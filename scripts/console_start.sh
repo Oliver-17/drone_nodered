@@ -16,10 +16,14 @@ set -u
 # 都不用改檔案（正常點圖示時用的就是下面這兩個預設值）
 SERVICE="${DRONE_CONSOLE_SERVICE:-drone-nodered.service}"
 PORT="${DRONE_CONSOLE_PORT:-1880}"
-# 要開哪一頁：空的＝編輯器（給你組流程）、/dashboard＝儀表板（給操作的人）。
-# 兩個桌面圖示用的是同一支腳本，只差這個環境變數。
-PATH_SUFFIX="${DRONE_CONSOLE_PATH:-}"
-URL="http://localhost:$PORT$PATH_SUFFIX"
+# 要開哪些頁：空字串＝編輯器、/dashboard＝儀表板。
+# 用逗號分隔可以一次開多個，順序＝分頁順序（最後開的那個通常會在前景）。
+# ⚠️ 這裡用 ${VAR-預設} 而不是 ${VAR:-預設}，少一個冒號差很多：
+#      ${VAR:-預設}  變數「沒設定 或 是空字串」都用預設
+#      ${VAR-預設}   只有「沒設定」才用預設，空字串會被尊重
+#    我們的「編輯器」剛好就是用空字串表示，所以不能用 :- ，
+#    否則 DRONE_CONSOLE_PATH="" 會被當成沒設，又把儀表板一起打開。
+PATHS="${DRONE_CONSOLE_PATH-/dashboard,/}"
 WAIT_SEC=60
 
 notify() { command -v notify-send >/dev/null 2>&1 && notify-send -a "無人機控制台" "無人機控制台" "$1" || true; }
@@ -62,5 +66,12 @@ while ! port_open; do
     fi
 done
 
-xdg-open "$URL" >/dev/null 2>&1 &
-notify "已開啟 $URL（${waited} 秒）"
+IFS=',' read -ra PAGES <<< "$PATHS"
+opened=""
+for p in "${PAGES[@]}"; do
+    xdg-open "http://localhost:$PORT$p" >/dev/null 2>&1 &
+    opened="$opened localhost:$PORT$p"
+    # 間隔一下：瀏覽器同時收到兩個 xdg-open 有時只會開其中一個
+    sleep 1
+done
+notify "已開啟${opened}（${waited} 秒）"

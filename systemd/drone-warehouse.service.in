@@ -1,0 +1,92 @@
+# =============================================================================
+#  drone-warehouse.service —— 倉庫場景：Gazebo ＋ PX4 SITL ＋ px4_bridge ＋ Nav2
+#
+#  這是「範本」，用法和注意事項見 drone-nodered.service.in 的檔頭。
+#
+#  ---------------------------------------------------------------------------
+#  ⚠️ 為什麼帶 api:=false（這一行是整個檔最重要的地方）
+#  ---------------------------------------------------------------------------
+#  warehouse_all.launch.py 預設會連 drone_api_node 一起開，但**底座服務
+#  （drone-nodered.service）裡已經有一個**。兩個同時跑的話，兩邊都會提供
+#  /MAV1/api/* 這些服務，而使用者按的指令會落到「其中一個」—— 哪一個不確定。
+#
+#  2026-10-08 實際踩到：兩套堆疊共存時，手動按的起飛跑到另一套的節點上，
+#  log 看起來像「沒來由的起飛」，查了很久才發現是兩個節點。
+#  而且兩套 Gazebo／PX4／Nav2 搶 CPU，那一輪的測量全部不可信。
+#
+#  所以這個服務只負責「場景」：模擬 ＋ 橋接 ＋ Nav2。drone_api 留在底座。
+#
+#  ---------------------------------------------------------------------------
+#  ⚠️ drone_api 需要的兩個場景參數在底座那邊設定
+#  ---------------------------------------------------------------------------
+#      local_origin_map   PX4 本地原點在 map 的座標（＝生成點）
+#      camera_pitch_deg   相機俯角，算 api/track 的最佳跟隨距離用
+#  它們由 install_services.sh 從 config/warehouse_geometry.yaml 讀出來，
+#  填進 drone-nodered.service 的 ExecStart。跑空白世界時那組值無害
+#  （只有「api/track 帶搜尋環線」時才會用到）。
+# =============================================================================
+[Unit]
+Description=倉庫場景（Gazebo + PX4 SITL + px4_bridge + Nav2）
+Documentation=file://@PKG_SRC@/docs/warehouse_runbook.md
+
+# Gazebo 要開視窗，需要桌面的 DISPLAY。等桌面起來再開才不會失敗。
+After=graphical-session.target
+
+# ⚠️ Wants ＋ After：底座必須先起來（2026-10-10 實測的結果）。
+#
+# 為什麼：倉庫這個服務會在 t=35 秒啟動 Nav2，而 Nav2 的 lifecycle_manager
+# 一建完 service client 就立刻呼叫 change_state。如果**那個時候**有新節點
+# 加入，DDS 的探索擾動會讓 map_server 的回應送不回去：
+#     map_server: configure 完成（16 ms 讀完地圖）
+#                 failed to send response to /map_server/change_state
+#                 "client will not receive response" (rmw_response.cpp:154)
+#     lifecycle_manager: 永遠卡在「Configuring map_server」
+#     → bt_navigator 沒被 configure → /navigate_to_pose 不存在 → api/goto 全壞
+#
+# 實測：先開倉庫、63 秒後才開 drone_api → 卡住；
+#       單獨開倉庫（含視覺）三次 → 3/3 正常；
+#       先開 drone_api、再開倉庫 → 正常。
+#
+# Wants 讓「按開倉庫」自動把底座也拉起來，After 保證順序。
+# 兩個服務同時啟動時 drone_api 約 5 秒就位，而 Nav2 要到 35 秒才開始 ——
+# 中間有 30 秒的餘裕，不需要額外 sleep。
+#
+# ⚠️ After 對 Type=simple 只保證「exec 出去了」，不保證「節點就緒」。
+#    這裡夠用是因為 warehouse_all.launch.py 自己把 Nav2 延後了 35 秒。
+#    以後若把那個延遲縮短，這個保證就會失效。
+Wants=drone-nodered.service
+After=drone-nodered.service
+
+# PartOf：底座停掉時這個服務自動跟著停。
+# 沒有這行的話 Node-RED 的「全部關閉」只會停底座，Gazebo 會變孤兒留在背景
+# 吃顯卡，而畫面上已經沒有任何地方可以關它。
+PartOf=drone-nodered.service
+
+# ⚠️ Conflicts：和空白世界的模擬互斥。
+#    兩個都會開 PX4 SITL ＋ Gazebo，同時跑就是上面說的「兩套堆疊」問題。
+#    有了這行，systemd 在啟動其中一個時會自動把另一個停掉 ——
+#    這比「記得先關」可靠。
+Conflicts=drone-sim.service
+
+[Service]
+Type=simple
+
+# sim_all.launch.py 會用 FOREGROUND=1 開 start_empty_sitl.sh，
+# 所以腳本會一直活著，收到停止訊號才去收掉 PX4 和 Gazebo。
+#
+# 參數的理由：
+#   api:=false        見檔頭（底座已經有一個 drone_api_node）
+#   model:=x500_cam_down  腹部支架相機、俯角 67°、無盲區 —— 視覺追蹤要用這支
+#   vision:=true      色彩偵測 → 目標世界座標
+#   altitude:=5.0     bridge 的巡航高度。3 m 時追蹤畫面晃得明顯，5 m 好很多
+#                     （貨架已經配合調高到 7 m，不然飛機會從上面過去）
+#   rviz:=false       要看 costmap 和規劃路徑再自己開；和視覺一起跑比較吃資源
+#   headless 不設     → Gazebo 開視窗（要看車繞圈）
+ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch drone_nodered warehouse_all.launch.py api:=false model:=x500_cam_down vision:=true altitude:=5.0 rviz:=false'
+
+# 45 秒：start_empty_sitl.sh 的收尾最多等 10 秒讓 Gazebo 好好關（釋放顯卡資源），
+# Nav2 的生命週期節點再給一些，其餘是裕度。
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target

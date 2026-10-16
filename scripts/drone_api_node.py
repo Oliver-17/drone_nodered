@@ -10,6 +10,8 @@
 #      ros2 service call /MAV1/api/set_altitude drone_nodered_interfaces/srv/SetAltitude "{altitude: 3.0}"
 #      ros2 service call /MAV1/api/patrol drone_nodered_interfaces/srv/Patrol \
 #          "{x: [10,10,0,0], y: [0,10,10,0], altitude: 3.0, speed: 2.0, loops: 1}"
+#      ros2 service call /MAV1/api/goto drone_nodered_interfaces/srv/GoTo \
+#          "{map_x: 0.0, map_y: 0.0, yaw: .nan, timeout: 0.0}"
 #      ros2 service call /MAV1/api/state   std_srvs/srv/Trigger    # 狀態查詢
 #      ros2 topic echo /MAV1/api/status
 #
@@ -22,18 +24,40 @@
 #      之後要在 Node-RED 自由組合（起飛 → 等 → 盤旋 → 降落）。
 #      服務裡如果偷偷串了下一步，外面就組不出別的順序。
 #
+#  ⚠️ api/goto 是這裡唯一「不走 PX4 內建模式」的動作（2026-10-07 L2 新增）。
+#      它把目標轉給 Nav2，Nav2 發 cmd_vel，cmd_vel_to_px4_node 翻成 offboard
+#      setpoint。也就是說整個節點裡有兩套互斥的控制路徑：
+#
+#          takeoff / hover / land / patrol / track  →  PX4 內建模式
+#          goto                                     →  Nav2 → offboard
+#
+#      所以 hover 和 land 一定要先取消進行中的 Nav2 目標，否則 Nav2 會繼續灌
+#      setpoint 把飛機拉走（見 _cancel_nav）。
+#
+#  ⚠️ goto 結束後的控制權交還，模擬和實機是**相反**的，這點驗過：
+#      模擬（drone_control/config/px4_bridge.yaml，hold_on_timeout: false）
+#          cmd_vel 停 → bridge 銷毀 publisher → PX4 自己掉回 AUTO_LOITER。
+#          L1 實測五個目標五次都這樣，交接乾淨，之後 hover/land 直接可用。
+#      實機（drone_bringup/config/real/px4_bridge.yaml，hold_on_timeout: true）
+#          bridge **不會**銷毀 publisher，它持續送位置 setpoint 把飛機釘在原地，
+#          PX4 一直留在 OFFBOARD。那是室內沒有 failsafe 出路時的刻意設計。
+#      L2 只保證模擬那一半。實機要加「goto 結束後呼叫 bridge 的 ~/release_hold」，
+#      但那件事沒辦法在開發機上驗證，所以留到實際飛場時再做（Oliver 的決定）。
+#
 #  介面約定（nodered_ros2 的積木只認這個，不認得無人機）：
 #      指令  <namespace>/api/<動作>   不需要參數的用 std_srvs/srv/Trigger；
 #                                     需要參數的用 drone_nodered_interfaces 裡的格式
 #      狀態  <namespace>/api/status   std_msgs/msg/String（內容是 JSON）
 # =============================================================================
 
+import collections
 import json
 import math
 import threading
 import time
 
 import rclpy
+from rclpy.action import ActionClient
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -42,10 +66,12 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from px4_msgs.msg import (BatteryStatus, FailsafeFlags, VehicleCommand, VehicleCommandAck,
                           VehicleGlobalPosition, VehicleLandDetected, VehicleLocalPosition,
                           VehicleStatus)
+from geometry_msgs.msg import PointStamped, PoseStamped
+from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from drone_nodered_interfaces.srv import Patrol, SetAltitude, Takeoff
+from drone_nodered_interfaces.srv import GoTo, Patrol, SetAltitude, Takeoff, Track
 
 NAN = float("nan")
 
@@ -69,6 +95,71 @@ PATROL_MAX_SPEED = 5.0
 # 水平距離小於這個就算到點。PX4 自己的 NAV_ACC_RAD 預設更大，
 # 但我們是自己判斷「可以送下一個點了」，抓緊一點路線比較方正。
 PATROL_ARRIVE_M = 0.5
+
+# 追蹤：停在目標多遠、多久沒看到就放棄
+# 預設跟隨距離（公尺，站在目標後方多遠）。
+#
+# ⚠️ 2026-10-08：從 2.0 改成 1.3。2.0 是 45° 相機時代的值 ——
+#    那時正下方是盲區（45° 俯角在 3 m 高只看得到前方 0.96~9.37 m），
+#    所以非得保持距離。換成 67° 之後正下方看得到（-0.22~3.60 m），
+#    這個理由消失了。
+#
+# 為什麼不是 0（正上方）：正上方只有 4.3° 的「機頭上仰」餘裕，而「以 1 m/s²
+#    減速」就要傾 5.8° —— 飛機每次煞車都會把目標頂出畫面上緣。
+#
+# 1.3 m 的來源是**光軸打到地面的位置**：
+#        最佳站位 = 高度 / tan(俯角) = 3.0 / tan(67°) = 1.27 m
+#    這個距離上目標落在畫面正中央，上仰和下俯各有 27° 餘裕（對稱），
+#    側向 ±2.24 m、方位 ±60°。對照表（俯角 67°、高度 3 m）：
+#        站位    側向容許  畫面垂直  方位容許  上仰餘裕  下俯餘裕
+#        0.00 m  ±1.90 m   +0.82     ±90°      4.3°     50.3°
+#        1.27 m  ±2.24 m   +0.00     ±60°     27.3°     27.4°   <- 最佳
+#        2.00 m  ±2.43 m   -0.37     ±51°     38.0°     16.6°
+#        3.00 m  ±2.70 m   -0.78     ±42°     49.3°      5.3°
+#
+# 這個常數只是「算不出來時」的退路 —— 正常情況下 distance=0 會由
+# camera_pitch_deg 和目前高度自動算（見 _ideal_standoff）。
+TRACK_DISTANCE_M = 1.3
+TRACK_DURATION_S = 30.0
+TRACK_LOST_S = 3.0
+# 看不到目標時最多找多久。要夠掃完整整兩圈：2026-09-28 實測掃一圈約 18 秒，
+# 只給一圈的時間的話，目標剛好在死角就白白放棄。
+TRACK_ACQUIRE_S = 45.0
+# 找不到目標時每秒把機頭轉多少度。相機是鎖死的，水平視野只有 ±34°，不轉頭就只能
+# 守株待兔（2026-09-28 實測：目標繞一圈 39 秒，等滿 30 秒還差 2 秒才進視野）。
+# ⚠️ 實際轉速會打折：每秒都以「當下的機頭」為基準加這個角度，飛機轉不到位時
+#    下一次的基準就落後一點。實測命令 20°/秒 只轉出 13°/秒（掃一圈要 28 秒）。
+#    所以這裡給 30°，實際約 20°/秒、掃一圈約 18 秒。
+#    不能再大：PX4 的 MPC_YAWRAUTO_MAX 預設 45°/s，命令超過飛機轉得動的速度沒有意義。
+TRACK_SCAN_STEP_DEG = 30.0
+TRACK_YAW_TOL_RAD = math.radians(8.0)   # 機頭差這麼多以內就不用再轉，免得一直微調抖動
+# 搜尋時最多繞幾圈還沒看到就放棄。
+# ⚠️ 用「圈數」而不是「秒數」：環線 47 m、飛機 2 m/s 理論上 24 秒一圈，
+#    但實測 RTF 約 0.57，牆鐘要 42 秒 —— 用秒數當上限會變成「隨負載而異」，
+#    同一個設定在不同機器上行為不同。圈數是和 RTF 無關的量。
+TRACK_SEARCH_LAPS = 2
+# 跟隨時給 DO_REPOSITION 的水平速度（公尺／秒）。
+# ⚠️ 不要用 -1.0（PX4 預設）。2026-10-08 實測：車 0.5 m/s 直線走，
+#    飛機只跟到 0.12 m/s，一路落後直到超出相機的 3.6 m 取得距離而追丟。
+#    要追上並維持，飛機必須明顯比目標快。
+TRACK_SPEED_MPS = 2.0
+# 目標速度低於這個值就當它沒在動（站位點退回「沿飛機→目標連線」的算法）。
+TRACK_MIN_TARGET_SPEED = 0.15
+# 站位點離飛機超過這麼遠才重送指令。太小會每秒都在送、讓 navigator 抖動。
+# ⚠️ 2026-10-08 試過 0.1 想讓指令連續一點，實測對晃動沒有改善（見
+#    TRACK_UPDATE_S 的說明），已還原。
+TRACK_GOAL_TOL_M = 0.3
+# 估目標速度用多長的時間窗。太短會被偵測雜訊放大，太長會跟不上轉向。
+TRACK_VEL_WINDOW_S = 1.0
+# 多久更新一次目標點。
+#
+# ⚠️ 2026-10-08 試過 0.2（5 Hz）＋ TRACK_GOAL_TOL_M 0.1 ＋ PX4 的
+#    MPC_ACC_HOR 2.0 / MPC_JERK_AUTO 2.0，Oliver 實測「暴衝急剎」**沒有改善**，
+#    全部還原。結論：問題不在調參，而在「用位置設定點追移動目標」這個架構 ——
+#    每一道 DO_REPOSITION 都是「衝到那個點然後停」，目標在動就必定反覆衝刺。
+#    要治本得改成速度控制（見檔頭的「追蹤架構」說明）。
+TRACK_UPDATE_S = 1.0        # 地面車很慢，1 秒綽綽有餘，
+                            # 而且每次都是一個完整的 DO_REPOSITION，不需要高頻
 
 
 def _names(msg_cls, prefix):
@@ -117,6 +208,32 @@ class DroneApi(Node):
         # 超過這麼久沒收到 PX4 的狀態，就當作沒連上，拒絕所有指令。
         self.stale_after = p("stale_after_s", 2.0)
         status_rate = p("status_rate_hz", 2.0)
+        # goto 的預設逾時。這是節點自己的保險，不是 Nav2 的 ——
+        # Nav2 的行為樹卡住時可能很久都不回 result（復原行為會一直重試）。
+        # 120 秒的依據：倉庫對角約 40 m，max_vel 0.8 m/s，繞貨架算 1.6 倍 → 約 80 秒。
+        self.goto_timeout = p("goto_timeout_s", 120.0)
+        # Nav2 的 action 名稱。它**不帶 namespace** —— nav2.launch.py 是用
+        # 全域名稱開那些伺服器的（參數檔裡的 topic 才帶 MAV1）。
+        self.nav_action = p("nav_action", "/navigate_to_pose")
+        # PX4 本地原點（＝起飛點）在 map 座標系的哪裡，格式 "x,y"。
+        # 給 api/track 的 search_x/search_y 做 map → NED 換算用。
+        #
+        # ⚠️ 這個值必須和 px4_bridge 的 odom_origin **完全相同** ——
+        #    兩者描述的是同一件事（PX4 的原點是「生成／起飛位置」而不是地圖原點）。
+        #    不一致的話搜尋航點會整組平移，而且不會報錯。
+        #    warehouse_all.launch.py 把同一個字串餵給兩邊，所以不會錯；
+        #    手動啟動時要自己對齊。
+        self.local_origin_map = p("local_origin_map", "")
+        # 相機的安裝俯角（度，0 = 水平、90 = 正下方）。只用來算「最佳跟隨距離」：
+        #     最佳站位 = 高度 / tan(俯角)   ← 光軸打到地面的位置，目標落在畫面正中
+        # 俯角 90（正下方）→ 0 公尺（正上方），和直覺一致。
+        # ⚠️ 要和 vision.launch.py 的 camera_pitch 一致。那邊是依機體自動選的
+        #    （x500_cam_down → 67、x500_depth_tilt → 45），所以換機體時這裡也要換。
+        self.camera_pitch_deg = p("camera_pitch_deg", 67.0)
+        # 取消 Nav2 之後要等多久才去切 PX4 模式。必須大於 bridge 的
+        # cmd_timeout_s（預設 0.5 秒），否則 ensureOffboard() 會把模式搶回去
+        # —— 理由和實測證據見 _settle_after_cancel。
+        self.cancel_settle_s = p("cancel_settle_s", 0.8)
 
         # ⚠️ 執行緒模型：服務要「等 PX4 的 ack」才回覆。
         #    單執行緒的話，服務回呼在等待時，收 ack 的訂閱回呼永遠排不到 —— 死鎖。
@@ -162,6 +279,12 @@ class DroneApi(Node):
         # 相對名稱：launch 把節點放進 namespace，就會變成 /MAV1/api/status
         self.status_pub = self.create_publisher(String, "api/status", 10)
 
+        # 視覺目標的位置（target_world_node 發的，PX4 本地 NED）。
+        # 相對名稱 → 節點在 namespace 裡就會變成 /MAV1/api/target
+        self.target = None
+        self._t_target = 0.0
+        self.create_subscription(PointStamped, "api/target", self._on_target, 10)
+
         self.create_service(Takeoff, "api/takeoff", self._srv_takeoff,
                             callback_group=self._srv_group)
         self.create_service(Trigger, "api/hover", self._srv_hover,
@@ -173,6 +296,10 @@ class DroneApi(Node):
         self.create_service(Patrol, "api/patrol", self._srv_patrol,
                             callback_group=self._srv_group)
         self.create_service(Trigger, "api/state", self._srv_state,
+                            callback_group=self._srv_group)
+        self.create_service(GoTo, "api/goto", self._srv_goto,
+                            callback_group=self._srv_group)
+        self.create_service(Track, "api/track", self._srv_track,
                             callback_group=self._srv_group)
 
         self.create_timer(1.0 / status_rate, self._publish_status,
@@ -191,6 +318,39 @@ class DroneApi(Node):
         self._patrol_thread = None
         self._patrol_stop = threading.Event()
         self._patrol_info = {"active": False, "index": 0, "total": 0}
+        self._track_thread = None
+        self._track_stop = threading.Event()
+        # 目標位置的歷史，用來估它的速度。maxlen 20 在偵測約 10~30 Hz 下
+        # 涵蓋 0.7~2 秒，夠蓋住 TRACK_VEL_WINDOW_S。
+        self._target_hist = collections.deque(maxlen=20)
+        # want/locked_s/reacquire 是 2026-10-12 加的，給畫面分辨「在找」和
+        # 「追到了而且穩住了」：
+        #   want      要保持的距離（distance=0 時是自動算出來的，看不到它
+        #             就沒辦法判斷實際的 distance 算不算準）
+        #   locked_s  鎖定後過了多久（＝「保持 N 秒」）
+        #   reacquire 這一趟曾經鎖定過 → 現在在找就是「跟丟回頭找」而不是冷啟動
+        self._track_info = {"active": False, "distance": None, "lost_s": None,
+                            "searching": False, "search_s": None,
+                            "phase": "idle", "search_index": None,
+                            "search_laps": None,
+                            "want": None, "locked_s": None, "reacquire": False}
+
+        # --- Nav2 導航（goto）---------------------------------------------
+        # ActionClient 放可重入群組：send_goal_async 的回呼要能在服務回呼
+        # 還沒返回時就被執行緒池排到，否則就是死鎖（和上面訂閱同一個理由）。
+        self._nav_client = ActionClient(self, NavigateToPose, self.nav_action,
+                                        callback_group=self._sub_group)
+        # goal handle 要留著才能取消。用鎖保護：服務回呼（送出）和
+        # action 回呼（收結果）在不同執行緒。
+        self._nav_lock = threading.Lock()
+        self._nav_handle = None
+        self._nav_seq = 0
+        self._nav_info = {"state": "idle", "goal": None, "seq": 0,
+                          "distance_remaining": None, "message": ""}
+        # cmd_vel 的完整話題名（就緒燈要數它有沒有訂閱者＝橋在不在）。
+        # 在這裡解析一次而不是每次發狀態都解析：namespace 在節點建好之後
+        # 就不會變了，而 resolve_topic_name 每次都要走一遍 rcl。
+        self._cmd_vel_topic = self.resolve_topic_name("cmd_vel")
 
         # 任務狀態：Node-RED 的「等待完成」積木就是看這個。
         # seq 每接受一個新指令就 +1 —— 積木靠它分辨「這次」和「上一次」的完成。
@@ -211,7 +371,20 @@ class DroneApi(Node):
             f"起飛高度限制={self.min_takeoff_altitude}~{self.max_takeoff_altitude} m")
         self.get_logger().info(
             f"服務：{self.get_namespace().rstrip('/')}/api/"
-            "{takeoff,hover,land,set_altitude,patrol,state}")
+            "{takeoff,hover,land,set_altitude,patrol,state,track,goto}")
+        self.get_logger().info(
+            f"api/track：相機俯角 {self.camera_pitch_deg:.0f}°，"
+            f"distance=0 會自動算成「高度/tan(俯角)」"
+            f"（3 m 高 → {self._ideal_standoff(3.0) or float('nan'):.2f} m）")
+        self.get_logger().info(
+            "api/track 的搜尋環線："
+            + (f"map 座標，本地原點在 map({self.local_origin_map})"
+               if self.local_origin_map
+               else "local_origin_map 未設定 → 只能用原地轉頭掃描"))
+        self.get_logger().info(
+            f"goto 用的 Nav2 action：{self.nav_action}"
+            f"（逾時 {self.goto_timeout:.0f} 秒）。"
+            "座標是 map 座標系，和 api/patrol 的「離起飛點 NED」不同")
 
     # -------------------------------------------------------------------------
     #  狀態
@@ -235,6 +408,31 @@ class DroneApi(Node):
         if self.lpos is None or not self.lpos.z_valid:
             return None
         return -self.lpos.z
+
+    def _ready(self):
+        """「現在可以用了嗎」—— 給 Node-RED 的就緒燈用（api/status 的 ready 欄位）。
+
+        為什麼在節點裡算而不是讓 Node-RED 自己判斷：Nav2 的 action server 和
+        cmd_vel 的橋**只有這個節點看得到**（Node-RED 只收得到 api/status 這串
+        JSON）。四項都是「不就緒的話指令會被拒、或是白按」的必要條件。
+
+        ⚠️ 這裡**不檢查視覺偵測**（Oliver 2026-10-12 決定）：偵測節點在不在
+        和「現在看得到車」是兩回事，放進就緒燈會讓人以為燈亮了就一定追得到。
+        追蹤看不看得到目標，看的是 track 那一組欄位。
+        """
+        connected = self._connected()
+        # xy_valid：連盤旋都需要水平位置估計，所以它和「連上 PX4」一樣是底線。
+        pos = connected and self.lpos is not None and bool(self.lpos.xy_valid)
+        # server_is_ready() 不阻塞（會阻塞的是 wait_for_server），所以放在
+        # 2 Hz 的狀態迴圈裡是安全的。
+        nav2 = self._nav_client.server_is_ready()
+        # cmd_vel 的訂閱者就是 cmd_vel_to_px4_node。少了它最陰險：Nav2 規劃
+        # 成功、狀態顯示「導航中」，但沒有人把 cmd_vel 翻成 offboard setpoint，
+        # 飛機從頭到尾不動，而且**不會有任何錯誤訊息**。
+        bridge = self.count_subscribers(self._cmd_vel_topic) > 0
+        r = {"px4": connected, "position": pos, "nav2": nav2, "bridge": bridge}
+        r["all"] = all(r.values())
+        return r
 
     def _publish_status(self):
         self._check_task()
@@ -262,6 +460,11 @@ class DroneApi(Node):
                     self._prev[key] = d[key]
         # 巡航進度：Node-RED 才看得到「現在飛到第幾個點」
         d["patrol"] = dict(self._patrol_info)
+        d["track"] = dict(self._track_info)
+        # 導航進度：Node-RED 的進度條看 distance_remaining（Nav2 的 feedback）
+        d["nav"] = dict(self._nav_info)
+        # 就緒燈：儀表板靠這個顯示「可以用了嗎」（見 _ready 的說明）
+        d["ready"] = self._ready()
         d["task"] = dict(self._task)
         d["watchdog"] = dict(self._wd)
         d.update({"last_command": self._last_cmd, "last_ok": self._last_ok,
@@ -302,8 +505,13 @@ class DroneApi(Node):
             if self.land is not None and self.land.landed and not self._armed():
                 self._end_task(True, "已落地上鎖")
         # patrol 由背景執行緒自己收尾（_patrol_note），這裡只管逾時
+        # goto 由 Nav2 的 action result 收尾（_nav_result），這裡也只管逾時
 
         if self._task["state"] == "running" and time.monotonic() > self._task_deadline:
+            # ⚠️ goto 逾時一定要連 Nav2 的 goal 一起取消。只把任務標成失敗的話
+            #    Nav2 會繼續飛到底，飛機在動而 Node-RED 顯示「失敗」—— 最糟的組合。
+            if name == "goto":
+                self._cancel_nav("節點端逾時")
             self._end_task(False, "逾時")
 
     # -------------------------------------------------------------------------
@@ -350,8 +558,11 @@ class DroneApi(Node):
         threading.Thread(target=self._emergency_land, args=(reason,), daemon=True).start()
 
     def _emergency_land(self, reason):
-        self._cancel_patrol(reason)
-        self._pause_here()          # 先清掉 PX4 手上的目標點，否則它會先飛完那一段
+        # ⚠️ 2026-10-07：原本漏了 _cancel_nav。看門狗在導航中觸發時，Nav2 會
+        #    繼續發 cmd_vel、bridge 繼續把 PX4 要回 OFFBOARD，和 AUTO_LAND 互搶，
+        #    而 nav.state 會一直停在 running —— Node-RED 顯示「導航中」而飛機在降落。
+        #    這是安全路徑，不能有這種洞。
+        self._settle_after_cancel(self._cancel_all_motion(reason))
         r = self._send(VehicleCommand.VEHICLE_CMD_NAV_LAND)
         ok = r == VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED
         self._end_task(False, f"看門狗：{reason}")
@@ -457,6 +668,12 @@ class DroneApi(Node):
             alt_amsl = NAN
             alt_note = "沒有有效海拔，改用 PX4 參數 MIS_TAKEOFF_ALT"
 
+        # 起飛只在落地時才允許（上面已擋），而 patrol/track/nav 都要求飛在空中，
+        # 所以理論上這裡沒有東西要取消。接上節流點是防禦性的 ——
+        # 「看門狗降落了但背景執行緒還活著」這類狀況出現過，而節流點的意義
+        # 就是不用再逐一推理哪個 handler 需要它。
+        self._settle_after_cancel(self._cancel_all_motion(f"改用 {name}"))
+
         # NAV_TAKEOFF 只會切換模式，不會解鎖（Commander.cpp:1064），所以先解鎖。
         if not self._armed():
             r = self._send(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, p1=1.0)
@@ -477,22 +694,25 @@ class DroneApi(Node):
             return self._finish(response, name, False, "沒有收到 PX4 的狀態，確認 agent 有連上")
         if not self._armed() or self.land.landed:
             return self._finish(response, name, False, "飛機在地上，不能盤旋")
-        # 巡航是背景在送目標點的，不先停掉的話它會繼續把飛機拉去下一個點
-        was_patrolling = self._cancel_patrol("使用者按了盤旋")
-        if was_patrolling:
+        # 任何正在驅動飛機的動作都要先停掉，否則它會繼續把飛機拉走
+        canceled = self._cancel_all_motion("使用者按了盤旋")
+        if canceled:
             self._end_task(False, "被盤旋指令取消")
-        if was_patrolling:
-            # 巡航中：要清掉 PX4 手上那個還沒飛完的目標點，否則飛機會先飛完再停
-            r = self._pause_here()
-            if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
-                return self._finish(response, name, False, f"取消巡航被拒絕：{self._ack_text(r)}")
-            self._begin_task(name, 5.0, done_now=True)
-            return self._finish(response, name, True, "已取消巡航，就地盤旋")
+        # patrol/track 要清掉 PX4 手上的目標點；nav 要等過 bridge 的逾時，
+        # 否則 ensureOffboard() 會把下面要設的 AUTO_LOITER 推翻（見 _settle_after_cancel）
+        self._settle_after_cancel(canceled)
+        # ⚠️ 不管有沒有取消到東西，都要明確送一次 AUTO_LOITER。
+        #    取消 Nav2 之後 PX4 會不會自己掉回 LOITER，模擬和實機是相反的
+        #    （模擬的 bridge 銷毀 publisher 觸發 failsafe；實機的 bridge 原地保持
+        #    讓 PX4 留在 OFFBOARD）。不要依賴那個差異。
         r = self._send(VehicleCommand.VEHICLE_CMD_DO_SET_MODE,
                        p1=MODE_FLAG_CUSTOM, p2=MAIN_MODE_AUTO, p3=SUB_MODE_AUTO_LOITER)
         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
             return self._finish(response, name, False, f"切換盤旋被拒絕：{self._ack_text(r)}")
         self._begin_task(name, 5.0, done_now=True)     # 切模式沒有「過程」，送出就算完成
+        if canceled:
+            return self._finish(response, name, True,
+                                f"已取消 {'、'.join(sorted(canceled))}，就地盤旋")
         return self._finish(response, name, True, "已切換為盤旋（定點定高）")
 
     def _srv_land(self, request, response):
@@ -505,9 +725,11 @@ class DroneApi(Node):
         # 進行中的任務（例如巡航）被降落打斷，要標成失敗，
         # 否則 Node-RED 的「等待完成」會一直等一個永遠不會完成的任務
         self._end_task(False, "被降落指令取消")
-        if self._cancel_patrol("使用者按了降落"):
-            # 先煞停再降落，否則 PX4 會先飛完當下那一段才開始降
-            self._pause_here()
+        # 先停掉所有在驅動飛機的動作，再煞停，否則 PX4 會先飛完當下那一段才開始降。
+        # ⚠️ 導航中降落也必須走 _settle_after_cancel —— NAV_LAND 雖然一律被接受
+        #    （force=true），但 bridge 的 ensureOffboard() 會在 cmd_timeout_s 內
+        #    持續把 PX4 要回 OFFBOARD，和 AUTO_LAND 互搶。
+        self._settle_after_cancel(self._cancel_all_motion("使用者按了降落"))
         # PX4 對 NAV_LAND 一律接受（Commander.cpp:1093 force=true），降在目前位置。
         r = self._send(VehicleCommand.VEHICLE_CMD_NAV_LAND)
         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
@@ -516,8 +738,715 @@ class DroneApi(Node):
         return self._finish(response, name, True, "已開始降落")
 
     # -------------------------------------------------------------------------
+    #  Nav2 導航（goto）
+    #
+    #  和這個節點其他動作最大的差別：這裡**不送 VehicleCommand**。
+    #  目標交給 Nav2，Nav2 算路徑、發 cmd_vel，cmd_vel_to_px4_node 翻成
+    #  offboard setpoint。所以飛行中 PX4 會在 OFFBOARD 而不是 AUTO_LOITER。
+    # -------------------------------------------------------------------------
+
+    def _nav_set(self, **kw):
+        """更新 api/status 的 nav 欄位（只有這裡會寫，避免多處各寫一半）。"""
+        self._nav_info = dict(self._nav_info, **kw)
+
+    def _cancel_nav(self, why):
+        """取消進行中的 Nav2 目標。有取消到才回 True（和 _cancel_patrol 同慣例）。
+
+        ⚠️ 一定要取消而不是只切 PX4 模式。Nav2 不知道有人按了 hover，
+        它會繼續發 cmd_vel，bridge 繼續灌 offboard setpoint，
+        結果是「切了 LOITER 但飛機還在往目標走」—— 兩個控制權持有者打架。
+        """
+        with self._nav_lock:
+            h = self._nav_handle
+            self._nav_handle = None
+        if h is None:
+            return False
+        self.get_logger().info(f"[goto] 取消導航：{why}")
+        # cancel_goal_async 不等它完成 —— 服務回呼不能卡在這裡。
+        # Nav2 收到取消後會停發 cmd_vel，bridge 逾時就會自己處理
+        # （模擬是銷毀 publisher 交還控制權，實機是原地保持）。
+        try:
+            h.cancel_goal_async()
+        except Exception as e:                       # noqa: BLE001
+            self.get_logger().warn(f"[goto] 取消請求送不出去：{e}")
+        self._nav_set(state="canceled", message=why, distance_remaining=None)
+        return True
+
+    def _srv_goto(self, request, response):
+        name = "goto"
+        gx, gy = float(request.map_x), float(request.map_y)
+        self.get_logger().info(f"[{name}] 收到指令 map=({gx:+.2f}, {gy:+.2f})")
+
+        if not self._connected():
+            return self._finish(response, name, False,
+                                "沒有收到 PX4 的狀態，確認 agent 有連上")
+        if not self._armed() or self.land.landed:
+            return self._finish(response, name, False, "飛機在地上，先呼叫 api/takeoff")
+        # ⚠️ 這個檢查是最常中的那一個。Nav2 沒跑的話 send_goal_async 會
+        #    無聲無息地永遠不回來，看起來像「服務掛了」。
+        if not self._nav_client.wait_for_server(timeout_sec=2.0):
+            return self._finish(
+                response, name, False,
+                f"Nav2 沒有在跑（{self.nav_action} 找不到）。"
+                "用 warehouse_all.launch.py 啟動，或單獨開 nav2.launch.py level:=full")
+
+        # 既有的動作要先停掉，否則多個控制路徑同時在動。
+        # keep 不填 —— 連舊的 nav 也要取消（送新目標會取代舊的，但狀態要收乾淨）。
+        self._settle_after_cancel(self._cancel_all_motion(f"改用 {name}"))
+
+        yaw = float(request.yaw)
+        # 「不在乎朝向」的兩種寫法都接受。|yaw| > pi 這條是給 Node-RED 用的 ——
+        # rosbridge 不能帶 NaN 給浮點欄位（型別檢查在
+        # rosbridge_library/internal/message_conversion.py:462-465，字串 "nan"
+        # 和 null 都會被拒絕），所以從那邊只能用一個「超出合法範圍」的數字。
+        if abs(yaw) > math.pi:
+            yaw = NAN
+        goal = NavigateToPose.Goal()
+        goal.pose = PoseStamped()
+        goal.pose.header.frame_id = "map"
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.pose.position.x = gx
+        goal.pose.pose.position.y = gy
+        if math.isnan(yaw):
+            # 四元數必須是單位長度，w=1 代表「朝東」。
+            # 填這個不代表要求朝東 —— nav2 參數的 yaw_goal_tolerance 是 3.14，
+            # 終點朝向本來就不檢查。給 NaN 會讓 Nav2 的 TF 計算整串變 NaN。
+            goal.pose.pose.orientation.w = 1.0
+        else:
+            goal.pose.pose.orientation.z = math.sin(yaw / 2.0)
+            goal.pose.pose.orientation.w = math.cos(yaw / 2.0)
+
+        timeout = float(request.timeout) or self.goto_timeout
+        self._nav_seq += 1
+        seq = self._nav_seq
+        self._nav_set(state="running", goal=[round(gx, 3), round(gy, 3)],
+                      seq=seq, distance_remaining=None, message="")
+        self._begin_task(name, timeout, target=None)
+
+        fut = self._nav_client.send_goal_async(
+            goal, feedback_callback=self._nav_feedback)
+        fut.add_done_callback(lambda f, q=seq: self._nav_goal_response(f, q))
+        return self._finish(response, name, True,
+                            f"已送出導航目標 map=({gx:+.2f}, {gy:+.2f})，"
+                            f"逾時 {timeout:.0f} 秒")
+
+    def _nav_goal_response(self, fut, seq):
+        """Nav2 回覆「接受／拒絕」這個目標。"""
+        if seq != self._nav_seq:
+            return                      # 已經被更新的 goto 取代了
+        try:
+            h = fut.result()
+        except Exception as e:           # noqa: BLE001
+            self._nav_set(state="failed", message=f"送出失敗：{e}")
+            self._end_task(False, f"導航目標送出失敗：{e}")
+            return
+        if not h.accepted:
+            self._nav_set(state="failed", message="Nav2 拒絕了這個目標")
+            self._end_task(False, "Nav2 拒絕了這個目標")
+            return
+        with self._nav_lock:
+            self._nav_handle = h
+        h.get_result_async().add_done_callback(
+            lambda f, q=seq: self._nav_result(f, q))
+
+    def _nav_feedback(self, msg):
+        fb = msg.feedback
+        self._nav_set(distance_remaining=round(float(fb.distance_remaining), 2))
+
+    def _nav_result(self, fut, seq):
+        if seq != self._nav_seq:
+            return
+        with self._nav_lock:
+            self._nav_handle = None
+        try:
+            status = fut.result().status
+        except Exception as e:           # noqa: BLE001
+            self._nav_set(state="failed", message=str(e))
+            self._end_task(False, f"導航結果讀取失敗：{e}")
+            return
+        # GoalStatus：4=SUCCEEDED 5=CANCELED 6=ABORTED
+        if status == 4:
+            self._nav_set(state="done", message="已到達", distance_remaining=0.0)
+            self._end_task(True, "已到達導航目標")
+        elif status == 5:
+            self._nav_set(state="canceled", message="已取消")
+            self._end_task(False, "導航被取消")
+        else:
+            # ABORTED 最常見的原因是目標在障礙物裡或規劃不出路徑。
+            # 不在這裡猜 —— Nav2 的 log 會寫，這裡只誠實回報。
+            self._nav_set(state="failed", message=f"Nav2 回報失敗（status={status}）")
+            self._end_task(False, f"導航失敗（Nav2 status={status}）"
+                                  "，看 Nav2 的 log 查原因")
+
+    # -------------------------------------------------------------------------
+    #  追蹤視覺目標
+    # -------------------------------------------------------------------------
+
+    def _on_target(self, m):
+        self.target = (float(m.point.x), float(m.point.y))
+        self._t_target = time.monotonic()
+        self._target_hist.append((self._t_target, *self.target))
+
+    def _target_velocity(self):
+        """估目標的水平速度（本地 NED，m/s）。估不出來回傳 (0.0, 0.0)。
+
+        為什麼需要：跟隨的站位點要放在「目標後方」—— 後方是**沿目標的行進
+        方向**，不是沿「飛機→目標」的連線。後者會讓命令的位移塌縮成
+        (d - dist)，距離越接近設定值位移越小，等於一個增益小於 1 的比例
+        控制器：對靜止目標正確，對等速移動的目標必定穩態落後。
+        2026-10-08 實測：車 0.5 m/s 直線走，飛機只跟到 0.12 m/s。
+
+        用「時間窗內最舊和最新的兩筆」做差分而不是相鄰兩筆 ——
+        偵測是逐幀的，相鄰兩筆的時間差小、像素雜訊會被放大成很大的速度。
+        """
+        h = self._target_hist
+        if len(h) < 2:
+            return (0.0, 0.0)
+        now = h[-1]
+        # 往回找第一筆落在時間窗外的，當作「最舊」
+        old = h[0]
+        for row in h:
+            if now[0] - row[0] <= TRACK_VEL_WINDOW_S:
+                old = row
+                break
+        dt = now[0] - old[0]
+        if dt < 0.2:        # 時間差太小，差分不可靠
+            return (0.0, 0.0)
+        return ((now[1] - old[1]) / dt, (now[2] - old[2]) / dt)
+
+    def _ideal_standoff(self, height):
+        """讓目標落在畫面正中的跟隨距離（公尺）。
+
+            最佳站位 = 高度 / tan(相機俯角)
+
+        這就是光軸打到地面的位置。俯角 90（正下方）→ 0（正上方）；
+        俯角 45、高度 3 → 3.0 m（和 45° 相機時代的舊預設 2.0 不同，
+        舊值其實也不是最佳，只是避開盲區的折衷）。
+
+        算不出來（俯角不在 0~90 之間、或高度無效）就回傳 None，
+        由呼叫者退回 TRACK_DISTANCE_M。
+        """
+        pitch = float(self.camera_pitch_deg)
+        if not (0.0 < pitch <= 90.0) or not math.isfinite(height) or height <= 0.0:
+            return None
+        t = math.tan(math.radians(pitch))
+        if t <= 1e-6:
+            return None
+        return height / t
+
+    def _target_age(self):
+        return time.monotonic() - self._t_target if self.target is not None else None
+
+    def _cancel_track(self, why):
+        """請背景的追蹤停下來並等它結束。回傳有沒有真的取消到東西。"""
+        t = self._track_thread
+        if t is None or not t.is_alive():
+            return False
+        self.get_logger().info(f"[track] 取消：{why}")
+        self._track_stop.set()
+        t.join(timeout=5.0)
+        return True
+
+    def _track_say(self, message, ok=True):
+        """把追蹤途中的階段變化寫進 api/status 的 last_message。
+
+        為什麼需要：last_message 原本**只在服務回覆的那一瞬間寫一次**，所以
+        整趟追蹤那一欄都凍在「開始追蹤…」，畫面看起來像卡在找目標
+        （Oliver 2026-10-12 回報）。階段變化才是那一欄該顯示的東西。
+        """
+        self._last_cmd, self._last_ok, self._last_msg = "track", ok, message
+
+    def _srv_track(self, request, response):
+        name = "track"
+        dur = float(request.duration) or TRACK_DURATION_S
+        alt = float(request.altitude)
+        # distance=0 的意思是「自動」：算出讓目標落在畫面正中的距離。
+        # 它會隨高度變（高度 / tan(俯角)），所以不能寫成固定常數。
+        dist = float(request.distance)
+        auto_note = ""
+        if dist == 0.0:
+            h_for_calc = alt if alt != 0.0 else (self._altitude() or 0.0)
+            ideal = self._ideal_standoff(h_for_calc)
+            if ideal is None:
+                dist = TRACK_DISTANCE_M
+                auto_note = f"（算不出最佳距離，用預設 {dist:.2f} m）"
+            else:
+                dist = max(0.0, ideal)
+                auto_note = (f"（自動：高度 {h_for_calc:.2f} m / "
+                             f"tan({self.camera_pitch_deg:.0f}°) = {dist:.2f} m，"
+                             "目標會落在畫面正中）")
+        self.get_logger().info(
+            f"[{name}] 收到指令（距離 {dist:.2f} m{auto_note}、{dur:.0f} 秒）")
+
+        # 下限放寬到 0 —— 俯角 67° 的相機正下方看得到（-0.22~3.60 m），
+        # 「飛到正上方」是合法的要求。45° 相機時代正下方是盲區，
+        # 所以舊的下限是 0.5。
+        if not (0.0 <= dist <= PATROL_MAX_RANGE_M):
+            return self._finish(response, name, False, f"距離 {dist:.2f} m 不合理")
+        if alt != 0.0 and not (self.min_takeoff_altitude <= alt <= self.max_takeoff_altitude):
+            return self._finish(response, name, False,
+                                f"高度 {alt:.2f} m 超出範圍 {self.min_takeoff_altitude}~"
+                                f"{self.max_takeoff_altitude} m")
+        if not self._connected():
+            return self._finish(response, name, False, "沒有收到 PX4 的狀態，確認 agent 有連上")
+        if not self._armed() or self.land.landed:
+            return self._finish(response, name, False, "飛機在地上，請先起飛")
+        if self.lpos is None or not self.lpos.xy_global or not self.lpos.z_global:
+            return self._finish(response, name, False, "沒有有效的經緯度參考，無法換算目標點")
+
+        # --- 搜尋環線（選填）：map 座標 → 本地 NED --------------------------
+        mxs = [float(v) for v in request.search_x]
+        mys = [float(v) for v in request.search_y]
+        if len(mxs) != len(mys):
+            return self._finish(response, name, False,
+                                f"search_x 有 {len(mxs)} 個、search_y 有 {len(mys)} 個，長度要一樣")
+        search = None
+        if mxs:
+            if len(mxs) < 3:
+                return self._finish(response, name, False,
+                                    f"搜尋環線至少要 3 個點，現在有 {len(mxs)}")
+            if len(mxs) > PATROL_MAX_POINTS:
+                return self._finish(response, name, False,
+                                    f"搜尋環線最多 {PATROL_MAX_POINTS} 個點，現在有 {len(mxs)}")
+            if not self.local_origin_map:
+                return self._finish(
+                    response, name, False,
+                    "有給搜尋環線但節點的 local_origin_map 參數是空的，無法把 map 座標"
+                    "換算成本地 NED。用 warehouse_all.launch.py 啟動，"
+                    "或手動帶 local_origin_map:=\"<x>,<y>\"（和 px4_bridge 的 odom_origin 相同）")
+            search = []
+            for mx, my in zip(mxs, mys):
+                ned = self._map_to_local(mx, my)
+                if ned is None:
+                    return self._finish(response, name, False,
+                                        f"local_origin_map 的格式不對：{self.local_origin_map!r}"
+                                        "（要 \"x,y\"）")
+                if abs(ned[0]) > PATROL_MAX_RANGE_M or abs(ned[1]) > PATROL_MAX_RANGE_M:
+                    return self._finish(
+                        response, name, False,
+                        f"搜尋航點 map({mx:+.1f},{my:+.1f}) 換算成離起飛點 "
+                        f"北{ned[0]:+.1f} 東{ned[1]:+.1f}，超出 ±{PATROL_MAX_RANGE_M:.0f} m")
+                search.append(ned)
+            self.get_logger().info(
+                f"[{name}] 搜尋環線 {len(search)} 點（map → 離起飛點 NED）："
+                + "、".join(f"({mx:+.1f},{my:+.1f})→北{a:+.1f}東{b:+.1f}"
+                            for (mx, my), (a, b) in zip(zip(mxs, mys), search)))
+
+        age = self._target_age()
+        if self.target is None:
+            # 從開機到現在完全沒收到過目標訊息。指令還是接受 —— 視覺節點可能剛啟動，
+            # 或目標還沒進到畫面，等一下就會出現。但先把最可能的原因印出來。
+            self.get_logger().warn("[track] 還沒收到過任何目標位置，"
+                                   "確認 vision.launch.py 有開、相機看得到目標")
+
+        # 同一時間只能有一個東西在下目標點
+        # 2026-10-07：原本只取消 patrol 和 track，漏了 nav ——
+        # 導航中開始追蹤會變成 Nav2 和 DO_REPOSITION 同時在動。
+        self._settle_after_cancel(self._cancel_all_motion("改成追蹤目標"))
+        self._end_task(False, "被追蹤指令取代")
+
+        height = alt if alt != 0.0 else (self._altitude() or 0.0)
+        looking = age is None or age > TRACK_LOST_S
+        self._track_stop.clear()
+        self._track_info = {"active": True, "distance": None,
+                            "lost_s": round(age, 1) if age is not None else None,
+                            "searching": looking, "search_s": 0.0,
+                            "phase": "searching" if looking else "following",
+                            "search_index": None, "search_laps": None,
+                            # 新一趟追蹤 → 還沒鎖定過，所以 reacquire 是 False
+                            "want": round(dist, 2), "locked_s": None,
+                            "reacquire": False}
+        # 任務逾時要把「開頭等目標」的時間也算進去，否則一開始找久一點就被判逾時。
+        # 追蹤途中每一次等待，_track_worker 會自己把 _task_deadline 往後挪。
+        # 任務逾時：有搜尋環線時「最多繞兩圈」沒有固定秒數上限（RTF 會變），
+        # 所以給一個寬鬆的外層保險，真正的放棄條件是圈數（見 _track_worker）。
+        if search is not None:
+            peri = sum(math.hypot(search[(i + 1) % len(search)][0] - search[i][0],
+                                  search[(i + 1) % len(search)][1] - search[i][1])
+                       for i in range(len(search)))
+            # 周長 / 最慢合理速度(0.5) x 圈數 x 2 倍 RTF 餘裕
+            budget = peri / 0.5 * TRACK_SEARCH_LAPS * 2.0
+        else:
+            budget = TRACK_ACQUIRE_S
+        self._begin_task(name, dur + budget + 15.0)
+        self._track_thread = threading.Thread(
+            target=self._track_worker, args=(dist, height, dur, search), daemon=True)
+        self._track_thread.start()
+        if not looking:
+            pre = ""
+        elif search is not None:
+            pre = f"先巡航 {len(search)} 點的環線找目標（最多 {TRACK_SEARCH_LAPS} 圈），"
+        else:
+            pre = f"先停在原地轉頭找目標（最多 {TRACK_ACQUIRE_S:.0f} 秒），"
+        return self._finish(response, name, True,
+                            f"開始追蹤：{pre}保持 {dist:.2f} m{auto_note}、"
+                            f"高度 {height:.2f} m、{dur:.0f} 秒")
+
+    def _track_worker(self, dist, height, duration, search=None):
+        """每秒把「目標前方 dist 公尺」的點送給 PX4。
+
+        為什麼不是直接飛到目標正上方：真實任務通常要保持距離觀察，
+        而且飛到正上方時相機（下傾 45°）反而看不到它，下一秒就追丟。
+
+        為什麼用 DO_REPOSITION 而不是 offboard：
+            這樣完全沿用巡航那一套（已經驗過），不用切模式、
+            也沒有「斷流觸發失效保護」的風險。地面車很慢，1 Hz 更新足夠。
+
+        看不到目標時有兩種行為（2026-10-08 新增後者）：
+
+            search=None   停在原地**慢慢轉頭掃描**，最多 TRACK_ACQUIRE_S 秒。
+                          空曠場地夠用：目標就在附近，只是暫時滑出 ±34° 的水平視野。
+
+            search=[…]    **巡航那條環線去找**（本地 NED 航點），最多
+                          TRACK_SEARCH_LAPS 圈。倉庫非得這樣：俯角 67° 的相機
+                          在 3 m 高只看得到前方 0~3.6 m，而走道長 12 m ——
+                          站在這頭轉一整圈也看不到那頭的車。原地掃描解決不了
+                          「目標根本不在附近」這件事。
+
+        兩種情況下「找」的時間都不算進 duration：要求追 60 秒就是真的追到 60 秒。
+        開頭沒看到也接受指令 —— 視覺節點可能比指令晚一步、或目標還沒進畫面。
+        """
+        alt_amsl = float(self.lpos.ref_alt) + height
+        deadline = None          # 追蹤的截止時間。第一次看到目標才開始算
+        wait_since = None        # 這一次「看不到」是從什麼時候開始（None = 現在看得到）
+        just_acquired = False    # 這一拍是不是「剛從搜尋切進跟隨」
+        locked_since = None      # 這一次鎖定是從什麼時候開始（None = 現在沒鎖定）
+        locked_once = False      # 這一趟有沒有鎖定過（決定搜尋訊息的講法）
+        s_i = None               # 目前要飛的搜尋航點索引（None = 還沒選）
+        s_first = True           # 這是不是「第一次」進搜尋（決定從哪個航點開始）
+        # 環線的繞行方向。+1 = 照列表順序、-1 = 反向。
+        #
+        # 為什麼要能反轉（2026-10-10 Oliver 提的）：
+        #   飛機和車刻意反向繞圈，所以**每一段都是對頭相遇**（接近 2.0+0.5
+        #   = 2.5 m/s）—— 取得目標快（最久 19 秒），但很容易掠過。
+        #   而掠過的那一刻我們明確知道一件事：**車就在身後**，只是相機往前看
+        #   拍不到而已。這時如果繼續原方向，會以 2.5 m/s 遠離，要再繞
+        #   31~47 m 才會重新遇到。
+        #   反轉成同向就變成「從後面追」：接近速度 2.0-0.5 = 1.5 m/s，
+        #   而且車在前方，正好在相機視野裡。
+        s_dir = 1
+        # 只反轉一次。反轉後兩者同向，不會再有對頭相遇；之後再丟失（例如車
+        # 轉過彎角）繼續同方向走就會追上，再反轉一次反而會變回對頭。
+        # 第一次相遇一定是對頭的（閉環上反向繞行，每一段都是對頭），
+        # 所以「一次反轉」永遠是對的方向。
+        s_flipped = False
+        s_at_acquire = None      # 鎖定那一刻「正要飛去」的航點索引
+        s_sent = None            # 已經把哪個索引送給 PX4 了（避免每秒重送同一個點）
+        s_adv = 0                # 總共前進過幾個航點 → 圈數 = s_adv // len(search)
+        try:
+            while True:
+                if self._track_stop.wait(TRACK_UPDATE_S):
+                    return
+                if self.lpos is None or not self.lpos.xy_valid:
+                    self._end_task(False, "位置估計失效")
+                    return
+
+                age = self._target_age()
+                lost = age is None or age > TRACK_LOST_S
+                if not lost and locked_since is None:
+                    # 「保持了多久」從**看得到目標的第一拍**開始算。
+                    # ⚠️ 不能只在下面「從搜尋切回跟隨」那一段設 —— 按下追蹤時
+                    #    車就在畫面裡的話，wait_since 從頭到尾都是 None，
+                    #    那一段永遠不會跑，畫面就一直看不到保持時間。
+                    locked_since = time.monotonic()
+                    locked_once = True
+                # ⚠️ 狀態要分三種，不能只用「有沒有距離」判斷（2026-09-29 Oliver 回報）：
+                #     正常追蹤       distance 有值、searching False
+                #     暫時看不到     還在追（還沒滿 TRACK_LOST_S），distance 留著上一次的值
+                #     真的在找目標   searching True，飛機停住轉頭掃描
+                #   之前把 distance 清成 None 當作「在找」，結果車子一靠近就掉出
+                #   45° 相機的視野，明明在追卻顯示「尋找目標中」。
+                # lost_s 是「上次看到目標是幾秒前」—— 它會跨趟累積（降落期間沒人看得到
+                #   目標），所以「找了多久」要另外用 search_s 算，不能拿 lost_s 當那個用。
+                self._track_info = {
+                    "active": True,
+                    "distance": self._track_info.get("distance"),
+                    "lost_s": round(age, 1) if age is not None else None,
+                    "searching": False,
+                    "search_s": None,
+                    # 2026-10-08：三段式追蹤的階段。searching / following
+                    # （Node-RED 的顯示要能分辨「在找」和「在追」）
+                    "phase": "following",
+                    "search_index": None,
+                    "search_laps": None,
+                    # 畫面要分辨「追到了而且穩住了」：實際距離 / 要保持的距離，
+                    # 加上已經保持多久。locked_since 在下面「剛看到目標」那一段
+                    # 才設，所以鎖定的**那一拍** locked_s 還是 None。
+                    "want": round(dist, 2),
+                    "locked_s": (None if locked_since is None
+                                 else round(time.monotonic() - locked_since, 1)),
+                    "reacquire": locked_once}
+
+                if lost:
+                    self._track_info["phase"] = "searching"
+                    # 跟丟了 → 「保持了多久」歸零（重新鎖定才重新計時）
+                    locked_since = None
+
+                    # --- 巡航搜尋（有給環線時走這條）------------------------
+                    if search is not None:
+                        if wait_since is None:
+                            wait_since = time.monotonic()
+                            self.get_logger().warn(
+                                f"[track] 看不到目標，開始巡航 {len(search)} 點的環線找"
+                                f"（最多 {TRACK_SEARCH_LAPS} 圈）")
+                            # 「跟丟回頭找」和「一開始就在找」對使用者的意義
+                            # 完全不同：前者代表車就在附近，不必重按一次追蹤。
+                            self._track_say(
+                                ("跟丟了，回頭巡航環線找" if locked_once
+                                 else f"看不到目標，開始巡航 {len(search)} 點的環線找")
+                                + f"（最多 {TRACK_SEARCH_LAPS} 圈）")
+                        if s_i is None:
+                            # ⚠️ 2026-10-10：第一次搜尋和重新搜尋的起點規則不同。
+                            #
+                            # 第一次 → **照列表的第 0 點**。
+                            #   原本是「挑最近的」，但那會在使用者沒要求的地方多停
+                            #   一次：從生成點 (-14,-9) 挑到的是 (0,-9)，於是底部
+                            #   那段 y=-9 被切成「14 m → 停 → 5.6 m → 停」兩段。
+                            #   而 y=±9 在貨架外面（貨架只到 ±7），車永遠不在那裡，
+                            #   相機往前看掃的是空地 —— 那個中間的停頓完全沒意義。
+                            #   照列表順序走就是一口氣 19.6 m 到 (5.6,-9) 再轉北。
+                            #   **代價：列表的第 0 點必須能從飛機現在的位置直線到達**
+                            #   （api/patrol 走直線、不避障）。倉庫的 (5.6,-9) 在
+                            #   貨架南側，從生成點和從走道口都是直線可達，所以安全。
+                            #
+                            # 重新搜尋 → **挑最近的**。
+                            #   丟失目標時飛機在環線的任何位置，硬飛回第 0 點可能很遠，
+                            #   而且路上可能有貨架（直線會卡住）。從最近的接上才合理。
+                            if s_at_acquire is not None and not s_flipped:
+                                # 掠過之後：車在身後 → 反轉繞行方向，回頭走向
+                                # 「剛才來的」那個航點（見 s_dir 的說明）。
+                                s_i = (s_at_acquire - s_dir) % len(search)
+                                s_dir = -s_dir
+                                s_flipped = True
+                                self.get_logger().info(
+                                    f"[track] 反向繞圈：車在身後，改成從後面追"
+                                    f"（回頭走向第 {s_i} 點，方向 {s_dir:+d}）")
+                            elif s_first:
+                                s_i = 0
+                                self.get_logger().info(
+                                    f"[track] 從環線的第 0 點開始找"
+                                    f"（北{search[0][0]:+.1f} 東{search[0][1]:+.1f}）")
+                            else:
+                                s_i = min(range(len(search)),
+                                          key=lambda k: math.hypot(
+                                              search[k][0] - float(self.lpos.x),
+                                              search[k][1] - float(self.lpos.y)))
+                                self.get_logger().info(
+                                    f"[track] 重新搜尋：從最近的第 {s_i} 個航點接上"
+                                    f"（方向 {s_dir:+d}）")
+                            s_first = False
+                            s_sent = None
+                        px, py = search[s_i]
+                        if self._distance_to(px, py) < PATROL_ARRIVE_M:
+                            s_i = (s_i + s_dir) % len(search)
+                            s_adv += 1
+                            s_sent = None
+                            laps = s_adv // len(search)
+                            if laps >= TRACK_SEARCH_LAPS:
+                                self._end_task(
+                                    False,
+                                    f"巡航了 {laps} 圈（{s_adv} 個航點）還是沒有看到目標")
+                                return
+                            px, py = search[s_i]
+                        if s_sent != s_i:
+                            # 只在換航點時送 —— 和 _patrol_worker 一樣。
+                            # 每秒重送同一個點會讓 navigator 不斷重設設定點。
+                            lat, lon = self._local_to_global(px, py)
+                            # 機頭朝行進方向：相機只看得到前方 0~3.6 m，
+                            # 機頭不轉等於閉著眼睛飛（和 _patrol_worker 同一個理由）
+                            yaw = math.atan2(py - float(self.lpos.y),
+                                             px - float(self.lpos.x))
+                            r = self._send(VehicleCommand.VEHICLE_CMD_DO_REPOSITION,
+                                           p1=-1.0, p2=REPOSITION_CHANGE_MODE,
+                                           p4=yaw, p5=lat, p6=lon, p7=alt_amsl)
+                            if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
+                                self._end_task(
+                                    False, f"搜尋航點被拒絕：{self._ack_text(r)}")
+                                return
+                            s_sent = s_i
+                            self.get_logger().info(
+                                f"[track] 搜尋航點 {s_i}："
+                                f"北{px:+.1f} 東{py:+.1f}（第 "
+                                f"{s_adv // len(search) + 1}/{TRACK_SEARCH_LAPS} 圈）")
+                        self._track_info["searching"] = True
+                        self._track_info["search_s"] = round(
+                            time.monotonic() - wait_since, 1)
+                        self._track_info["search_index"] = s_i
+                        self._track_info["search_laps"] = s_adv // len(search)
+                        continue
+
+                    # --- 原地轉頭掃描（沒給環線時的舊行為）------------------
+                    # 停在原地等 —— 不要往最後看到的方向衝，那是誤判時最危險的行為
+                    if wait_since is None:
+                        wait_since = time.monotonic()
+                        self._pause_here()      # 先煞停水平移動，位置就定在這裡
+                        self.get_logger().warn("[track] 看不到目標，停在原地轉頭找")
+                        self._track_say(
+                            ("跟丟了，停在原地轉頭找" if locked_once
+                             else "看不到目標，停在原地轉頭找")
+                            + f"（最多 {TRACK_ACQUIRE_S:.0f} 秒）")
+                    else:
+                        # 原地掃描：每秒把機頭往同一個方向轉一點，轉滿一圈就等於
+                        # 用那 ±34° 的視野掃過全場。位置留 NaN → navigator 沿用現在的
+                        # 設定點（navigator_main.cpp:336），所以只會轉頭、不會飄走。
+                        yaw = float(self.lpos.heading) + math.radians(TRACK_SCAN_STEP_DEG)
+                        yaw = (yaw + math.pi) % (2 * math.pi) - math.pi
+                        r = self._send(VehicleCommand.VEHICLE_CMD_DO_REPOSITION,
+                                       p1=-1.0, p2=REPOSITION_CHANGE_MODE, p4=yaw)
+                        if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
+                            self._end_task(False, f"掃描轉向被拒絕：{self._ack_text(r)}")
+                            return
+                    searched = time.monotonic() - wait_since
+                    self._track_info["searching"] = True
+                    self._track_info["search_s"] = round(searched, 1)
+                    if searched > TRACK_ACQUIRE_S:
+                        self._end_task(False, f"等了 {TRACK_ACQUIRE_S:.0f} 秒還是沒有看到目標")
+                        return
+                    continue
+
+                if wait_since is not None:
+                    # 等待不算進追蹤時間，任務逾時也要跟著往後挪 ——
+                    # 不挪的話 _check_task 會在我們還在追的時候把任務判定逾時
+                    waited = time.monotonic() - wait_since
+                    wait_since = None
+                    # ⚠️ 2026-10-08：剛鎖定時一定要送一道新指令，不能讓
+                    #    「站位點離飛機不夠遠」把它擋掉。
+                    #    搜尋階段 PX4 手上握著搜尋航點，飛機正以 TRACK_SPEED_MPS
+                    #    往那裡飛。不蓋掉的話飛機會直接掠過車子，3 秒後判定丟失
+                    #    回到搜尋 —— 症狀就是「第一次掃到不會鎖定，要繞第二圈」。
+                    #    而剛鎖定那一拍 _target_hist 只有一兩筆，速度估計是 (0,0)，
+                    #    站位點退回「沿飛機→目標連線」，很容易算出離飛機很近的點，
+                    #    所以這個閘門幾乎一定會擋住。
+                    just_acquired = True
+                    # 記下鎖定那一刻正要飛去的航點 —— 下次進搜尋時要靠它算出
+                    # 「剛才是從哪一個航點過來的」，才能回頭走向車所在的那一側。
+                    # ⚠️ 不能用「挑最近的」：飛機在 (5.6,+2) 往北、原本要去
+                    #    (5.6,+9)，車在 (5.6,0) 往南 —— 最近的航點是 (5.6,+9)
+                    #    （7 m）而不是 (5.6,-9)（11 m），挑最近的會繼續往北，
+                    #    正好和車相反。
+                    s_at_acquire = s_i
+                    # 搜尋狀態歸零：圈數要重新算（這一次搜尋已經成功結束了）。
+                    s_i = s_sent = None
+                    s_adv = 0
+                    self._track_info["search_index"] = None
+                    self._track_info["search_laps"] = None
+                    self.get_logger().info(f"[track] 看到目標了（找了 {waited:.0f} 秒）")
+                    self._track_say(f"看到目標了（找了 {waited:.0f} 秒），開始跟隨")
+
+                if deadline is None:
+                    deadline = time.monotonic() + duration      # 從看到目標才開始計時
+                elif time.monotonic() >= deadline:
+                    self._end_task(True, f"追蹤 {duration:.0f} 秒結束")
+                    return
+
+                tx, ty = self.target
+                dx, dy = tx - self.lpos.x, ty - self.lpos.y
+                d = math.hypot(dx, dy)
+                self._track_info["distance"] = round(d, 2)
+                if d > PATROL_MAX_RANGE_M:
+                    self._end_task(False, f"目標距離 {d:.1f} m 超出範圍")
+                    return
+
+                # --- 站位點 ---------------------------------------------------
+                # ⚠️ 2026-10-08 改寫。原本是「從目標往飛機的方向退 dist」，
+                #    那樣命令的位移是 (d - dist) —— 距離越接近設定值位移越小，
+                #    等於增益 < 1 的比例控制器：對靜止目標正確，對等速移動的
+                #    目標必定穩態落後。實測車 0.5 m/s，飛機只跟到 0.12 m/s，
+                #    一路落後到超出相機的 3.6 m 取得距離而追丟。
+                #
+                # 現在改成「沿目標的行進方向跟在它後面」：位移不會塌縮，
+                # 而且飛機會穩定待在車的正後方 —— 剛好是相機前方那個視窗。
+                vx, vy = self._target_velocity()
+                vmag = math.hypot(vx, vy)
+                if vmag >= TRACK_MIN_TARGET_SPEED:
+                    gx = tx - vx / vmag * dist
+                    gy = ty - vy / vmag * dist
+                elif d > 1e-6:
+                    # 目標幾乎沒動 → 沒有「行進方向」可用，退回沿連線後退。
+                    # 這時候位移塌縮不是問題（目標不動，落後就不會累積）。
+                    gx = tx - dx / d * dist
+                    gy = ty - dy / d * dist
+                else:
+                    gx, gy = tx, ty
+
+                # 機頭要轉向目標 —— 相機是鎖死在機身上的，不轉頭的話目標會從畫面
+                # 側邊滑出去。2026-09-28 實測：目標繞圈時飛機從頭到尾朝同一個方向，
+                # 第 12 秒就判定追丟，之後整整 48 秒停在原地不動。
+                # DO_REPOSITION 的 param4 就是要保持的機頭角，單位弧度、NED 座標
+                # （navigator_main.cpp:316 `rep->current.yaw = cmd.param4;`）
+                bearing = math.atan2(dy, dx)        # NED：x 北、y 東 → atan2(東, 北)
+                err = bearing - float(self.lpos.heading)
+                err = (err + math.pi) % (2 * math.pi) - math.pi
+
+                # 「要不要動」看的是**站位點**離飛機多遠，不是目標離飛機多遠。
+                # 用後者在新的站位點算法下會自相矛盾：目標在 1.3 m 處可能表示
+                # 已經到位（正後方），也可能表示站位點還在 2 m 外（側面）。
+                goal_d = math.hypot(gx - float(self.lpos.x), gy - float(self.lpos.y))
+                need_move = goal_d > TRACK_GOAL_TOL_M or just_acquired
+                need_turn = abs(err) > TRACK_YAW_TOL_RAD
+                just_acquired = False
+                if not need_move and not need_turn:
+                    continue        # 位置和機頭都到位了，不用再送新的指令
+
+                if need_move:
+                    lat, lon = self._local_to_global(gx, gy)
+                    alt = alt_amsl
+                else:
+                    # 只要轉頭：位置和高度全留 NaN，navigator 會沿用現在的設定點
+                    # （navigator_main.cpp:336「Position is not changing, thus we keep the setpoint」）
+                    lat = lon = alt = NAN
+
+                r = self._send(VehicleCommand.VEHICLE_CMD_DO_REPOSITION,
+                               p1=TRACK_SPEED_MPS, p2=REPOSITION_CHANGE_MODE,
+                               p4=bearing, p5=lat, p6=lon, p7=alt)
+                if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
+                    self._end_task(False, f"目標點被拒絕：{self._ack_text(r)}")
+                    return
+        finally:
+            # 追蹤結束的結果也要寫進 last_message，否則那一欄會凍在「開始追蹤…」，
+            # 看不出來是追完了還是中途失敗。
+            # 判 name == "track"：被別的指令接手時 _task 已經換成新指令了，
+            # 那時候的結果不該被寫成追蹤的結果。
+            t = self._task
+            if t["name"] == "track" and t["state"] in ("done", "failed"):
+                self._track_say(t["message"] or t["state"], ok=(t["state"] == "done"))
+            self._track_info = {"active": False,
+                                "distance": self._track_info.get("distance"),
+                                "lost_s": None, "searching": False, "search_s": None,
+                                "phase": "idle", "search_index": None,
+                                "search_laps": None,
+                                "want": None, "locked_s": None, "reacquire": False}
+
+    # -------------------------------------------------------------------------
     #  巡航
     # -------------------------------------------------------------------------
+
+    def _map_to_local(self, mx, my):
+        """map 座標（ENU：x 東、y 北）→ PX4 本地座標（NED：x 北、y 東）。
+
+        PX4 的本地原點是「生成／起飛位置」，在 map 上的位置由
+        local_origin_map 參數給（和 px4_bridge 的 odom_origin 是同一個值）。
+
+            ned_x(北) = map_y - origin_y
+            ned_y(東) = map_x - origin_x
+
+        ⚠️ 這個轉換和 px4_tf_node 的 NED→ENU 必須互為反函數。
+        2026-10-08 用倉庫的搜尋環線對照過：
+            spawn (map) = (-14.0, -9.0)
+            map (+5.6, -9.0) → NED 北 +0.0 東 +19.6     （5.6-(-14) = 19.6）
+            map (+5.6, +9.0) → NED 北 +18.0 東 +19.6
+        座標轉換的雙向一致性是這個專案踩過最多次的雷，不要憑印象改。
+
+        回傳 None 表示 local_origin_map 沒設定或格式不對。
+        """
+        parts = [v for v in self.local_origin_map.replace(" ", "").split(",") if v]
+        if len(parts) < 2:
+            return None
+        try:
+            ox, oy = float(parts[0]), float(parts[1])
+        except ValueError:
+            return None
+        return (my - oy, mx - ox)
 
     def _local_to_global(self, x, y):
         """把本地座標（公尺，北東）換成經緯度。
@@ -553,6 +1482,64 @@ class DroneApi(Node):
         self._patrol_stop.set()
         t.join(timeout=5.0)
         return True
+
+    # -------------------------------------------------------------------------
+    #  控制權互斥（L3，2026-10-07）
+    # -------------------------------------------------------------------------
+
+    def _cancel_all_motion(self, why, keep=()):
+        """取消所有「會持續驅動飛機」的動作，keep 裡列的除外。
+
+        回傳實際取消掉的名字集合（空集合 = 本來就沒有東西在動）。
+
+        ⚠️ 新增一種會持續驅動飛機的動作時，一定要加進這個函式 ——
+        這是唯一的節流點。以前是每個 handler 各自呼叫 _cancel_patrol /
+        _cancel_track / _cancel_nav 的不同組合，結果就漂掉了：
+        2026-10-07 稽核發現 _emergency_land、_srv_track、_srv_patrol
+        各漏了一到兩個，而「兩個控制權持有者同時在動」不會印任何錯誤訊息。
+
+        ⚠️ 不要改成 `or` 短路。三個都必須被求值，否則第一個回 True 之後
+        後面兩個就不會被取消了。
+        """
+        done = set()
+        if "patrol" not in keep and self._cancel_patrol(why):
+            done.add("patrol")
+        if "track" not in keep and self._cancel_track(why):
+            done.add("track")
+        if "nav" not in keep and self._cancel_nav(why):
+            done.add("nav")
+        return done
+
+    def _settle_after_cancel(self, canceled):
+        """取消之後把飛機交回「沒有人在驅動」的狀態。
+
+        兩類動作要用不同手段收尾，這是 L3 的核心：
+
+        patrol / track  走 PX4 內建模式，最後送出去的目標點還留在 PX4 裡，
+                        要用 _pause_here()（全 NaN 的 DO_REPOSITION）清掉。
+
+        nav（Nav2）     走 offboard。取消 action 只讓 Nav2 停發 cmd_vel，
+                        但 cmd_vel_to_px4_node 的 ensureOffboard()
+                        （cmd_vel_to_px4_node.cpp:444-458）只要 cmd_timeout_s
+                        內收到過 cmd_vel 就會主動送 DO_SET_MODE 把 PX4 拉回
+                        OFFBOARD —— 會把我們接著要設的 AUTO_LOITER 推翻。
+
+        2026-10-07 實測到的競態（l2b 那一輪的 bridge log）：
+            946.916  bridge: 有人在送 cmd_vel 但飛機不在 offboard → 切回 OFFBOARD
+            946.948  controller_server: Goal was canceled. Stopping the robot.
+            947.467  bridge: 超過 0.50 秒沒收到 cmd_vel，已銷毀 publisher
+        那次 hover 之所以成功，只是因為 Nav2 剛好在 0.5 秒後就停了、bridge 跟著
+        放手。cmd_vel 要是不停（L4 的視覺追蹤就是這樣），hover 會輸。
+
+        所以取消到 nav 時要等過 bridge 的逾時再往下走。
+        """
+        if canceled & {"patrol", "track"}:
+            self._pause_here()
+        if "nav" in canceled:
+            # 比 bridge 的 cmd_timeout_s 預設 0.5 秒多一點餘裕。
+            # 這裡用 sleep 是可以的 —— 服務在互斥群組，訂閱在可重入群組，
+            # 睡著期間狀態還是在更新（和 _send 等 ack 同一個道理）。
+            time.sleep(self.cancel_settle_s)
 
     def _pause_here(self):
         """就地煞停。
@@ -608,7 +1595,8 @@ class DroneApi(Node):
             return self._finish(response, name, False, "水平位置估測無效（xy_valid 為 false）")
 
         # 新的巡航要蓋掉舊的：先確實停掉，不然兩條執行緒會輪流送不同的點
-        self._cancel_patrol("收到新的巡航指令")
+        # 2026-10-07：原本只取消 patrol，連 track 都沒取消（Nav2 之前就有的洞）。
+        self._settle_after_cancel(self._cancel_all_motion("收到新的巡航指令"))
         self._end_task(False, "被新的巡航指令取代")
 
         # 高度：0 代表維持現在的高度
@@ -641,10 +1629,31 @@ class DroneApi(Node):
                     if self._patrol_stop.is_set():
                         return
                     lat, lon = self._local_to_global(px, py)
+                    # 機頭朝「這一段的行進方向」（2026-10-08 新增 param4）。
+                    #
+                    # ⚠️ 原本沒帶 param4，預設是 NaN，PX4 收到 NaN 就是「不控制偏航」
+                    #    → 機頭留在原地不動。那對巡航本身沒差，但相機裝在機頭上：
+                    #    俯角 67° 的相機只看得到前方 0~3.6 m 的地面，機頭卡住的話
+                    #    看的是「出發時的方向」而不是「要去的方向」，
+                    #    用巡航搜尋目標時等於閉著眼睛飛。
+                    #
+                    # param4 的單位是弧度、世界 NED（navigator_main.cpp:316
+                    # `rep->current.yaw = cmd.param4;`）。本地座標 x 是北、y 是東，
+                    # 所以方位角＝atan2(東分量, 北分量)。
+                    # _track_worker 用的是同一個寫法。
+                    # _distance_to 在位置無效時回傳 0.0（不是 None），
+                    # 所以「> PATROL_ARRIVE_M」已經涵蓋「位置有效」這個條件。
+                    if self._distance_to(px, py) > PATROL_ARRIVE_M:
+                        yaw = math.atan2(py - float(self.lpos.y), px - float(self.lpos.x))
+                    else:
+                        # 已經在點上（或位置無效）→ 不要硬塞一個方位，
+                        # 給 NaN 讓 PX4 維持現狀，免得原地亂轉。
+                        yaw = NAN
                     r = self._send(VehicleCommand.VEHICLE_CMD_DO_REPOSITION,
                                    # param1 是水平速度，-1 代表用 PX4 預設
                                    p1=(speed if speed != 0.0 else -1.0),
                                    p2=REPOSITION_CHANGE_MODE,
+                                   p4=yaw,
                                    p5=lat, p6=lon, p7=alt_amsl)
                     if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
                         self._patrol_note(False, f"第 {done + 1} 個點被拒絕：{self._ack_text(r)}")
@@ -780,6 +1789,20 @@ class DroneApi(Node):
         if self.lpos is None or not self.lpos.z_global:
             return self._finish(response, name, False,
                                 "沒有有效的高度參考（z_global 為 false），無法換算成海拔")
+
+        # ⚠️ 2026-10-07（L3）：導航中改高度必須先取消導航。
+        #    看起來「高度和水平導航是兩回事」，但實作上不是：
+        #      ① Nav2 是 2D 的，高度由 cmd_vel_to_px4_node 的 flight_altitude 持有
+        #      ② DO_CHANGE_ALTITUDE 會把 PX4 切成 AUTO_LOITER（Commander.cpp:782），
+        #         而 bridge 的 ensureOffboard() 會再把它要回 OFFBOARD → 互搶
+        #    所以行為定義成「新指令接手」，和這個節點其他動作一致。
+        #    不做成「導航中拒絕改高度」是因為那樣 Node-RED 會多一個要處理的錯誤，
+        #    而使用者的意圖很清楚。訊息裡會講明導航被取消了，不是靜默。
+        canceled = self._cancel_all_motion(f"改用 {name}")
+        if canceled:
+            self._end_task(False, f"被 {name} 取代")
+        self._settle_after_cancel(canceled)
+
         alt_amsl = float(self.lpos.ref_alt) + h
         now = self._altitude()
         now_note = "目前高度未知" if now is None else f"目前 {now:.2f} m"
@@ -788,7 +1811,10 @@ class DroneApi(Node):
         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
             return self._finish(response, name, False, f"調整高度被拒絕：{self._ack_text(r)}")
         self._begin_task(name, 60.0, target=h)
-        return self._finish(response, name, True, f"已送出：{now_note} → {h:.2f} m")
+        note = f"已送出：{now_note} → {h:.2f} m"
+        if canceled:
+            note += "（已取消 " + "、".join(sorted(canceled)) + "）"
+        return self._finish(response, name, True, note)
 
 
 def main():

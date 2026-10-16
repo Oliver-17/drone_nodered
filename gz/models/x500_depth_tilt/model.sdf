@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- =============================================================================
+  x500_depth_tilt —— x500 + RGB/深度相機，相機下傾 45°
+
+  為什麼自己寫感測器，不直接 include PX4 的 OakD-Lite：
+    1. **解析度**：原本是 1920×1080@30，光是渲染就把模擬拖慢到
+       EKF2 判定 "High Accelerometer Bias"、PX4 直接拒絕解鎖
+       （2026-09-28 實測）。視覺偵測完全不需要 1080p，降到 640×360@15
+       既能偵測又跑得動。
+    2. **角度**：相機要下傾 45° 才看得到地面目標。朝正前方（PX4 原本的
+       x500_depth）在 3 m 高看前方 3 m 的目標時，目標在視線下方 44°，
+       完全不在畫面裡 —— 實測偵測率 0%。
+
+  為什麼是 45° 不是正下方：正下方只看得到腳下，目標一往前跑就不見了。
+
+  感測器名稱刻意和 PX4 的一致（IMX214、StereoOV7251、topic depth_camera），
+  這樣 launch 檔裡的 topic 路徑不用分兩套。
+
+  ⚠️ 相機俯角改了的話，target_world_node 的 camera_pitch_deg 參數要一起改。
+============================================================================= -->
+<sdf version='1.9'>
+  <model name='x500_depth_tilt'>
+    <self_collide>false</self_collide>
+    <include merge='true'>
+      <uri>x500</uri>
+    </include>
+
+    <link name="camera_link">
+      <pose relative_to="base_link">.12 0 .242 0 0.785 0</pose>
+      <inertial>
+        <mass>0.05</mass>
+        <inertia><ixx>1e-5</ixx><iyy>1e-5</iyy><izz>1e-5</izz></inertia>
+      </inertial>
+      <visual name="camera_visual">
+        <geometry><box><size>0.03 0.09 0.02</size></box></geometry>
+        <material>
+          <ambient>0.1 0.1 0.1 1</ambient><diffuse>0.1 0.1 0.1 1</diffuse>
+        </material>
+      </visual>
+      <sensor name="IMX214" type="camera">
+        <gz_frame_id>camera_link</gz_frame_id>
+        <pose>0.01233 -0.03 .01878 0 0 0</pose>
+        <camera>
+          <horizontal_fov>1.204</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>360</height>
+          </image>
+          <clip>
+            <near>0.1</near>
+            <far>100</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>15</update_rate>
+        <visualize>true</visualize>
+      </sensor>
+      <sensor name="StereoOV7251" type="depth_camera">
+        <gz_frame_id>camera_link</gz_frame_id>
+        <pose>0.01233 -0.03 .01878 0 0 0</pose>
+        <camera>
+          <horizontal_fov>1.274</horizontal_fov>
+          <image>
+            <width>640</width>
+            <height>480</height>
+            <format>R_FLOAT32</format>
+          </image>
+          <clip>
+            <near>0.2</near>
+            <far>19.1</far>
+          </clip>
+        </camera>
+        <always_on>1</always_on>
+        <update_rate>15</update_rate>
+        <visualize>true</visualize>
+        <topic>depth_camera</topic>
+      </sensor>
+    </link>
+
+    <joint name="CameraJoint" type="fixed">
+      <parent>base_link</parent>
+      <child>camera_link</child>
+      <pose relative_to="base_link">.12 0 .242 0 0.785 0</pose>
+    </joint>
+  </model>
+</sdf>

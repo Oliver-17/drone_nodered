@@ -25,7 +25,23 @@ set -e
 MARKER="# generated-by: drone_nodered/scripts/install_services.sh"
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+# 空白世界（drone-sim.service）2026-10-12 退休 —— Oliver 說舊地圖不用了。
+# 東西都還留著（systemd/drone-sim.service.in、gz/worlds/empty*.sdf），
+# 帶 --with-empty-sim 就裝回來。
+WITH_EMPTY_SIM=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run)        DRY_RUN=1 ;;
+        --with-empty-sim) WITH_EMPTY_SIM=1 ;;
+        -h|--help)
+            echo "用法： $0 [--dry-run] [--with-empty-sim]"
+            echo "  --dry-run         只印會做什麼，不寫任何檔"
+            echo "  --with-empty-sim  連舊的空白世界服務（drone-sim）一起裝"
+            exit 0 ;;
+        *) echo "✗ 不認得的參數：$1（--help 看用法）"; exit 1 ;;
+    esac
+    shift
+done
 
 PKG_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 工作空間 = src 的上一層（<ws>/src/drone_nodered/scripts → <ws>）
@@ -55,6 +71,32 @@ echo "✓ 前提檢查通過"
 
 mkdir -p "$UNIT_DIR"
 
+# --- 場景參數（2026-10-08）-------------------------------------------------
+# drone_api_node 需要知道兩件和場景綁定的事：
+#     local_origin_map   PX4 本地原點（＝生成點）在 map 的座標
+#     camera_pitch_deg   相機俯角，算 api/track 的「最佳跟隨距離」用
+#
+# 為什麼在安裝時填進服務檔、而不是讓節點自己讀幾何檔：
+#   drone_api_node 刻意不知道地圖的存在（它只和 PX4 說話），這樣換場地、
+#   甚至換成別的載具都不用改它。場景知識由啟動的人注入。
+#
+# 為什麼一定要和 px4_bridge 的 odom_origin 一致：
+#   兩者描述同一件事。不一致的話 api/track 的搜尋航點會整組平移，
+#   **而且不會報錯**。warehouse_all.launch.py 內部是共用同一個變數，
+#   但底座的 drone_api 是另一個服務，只能靠這裡填對。
+GEOM="$PKG_SRC/config/warehouse_geometry.yaml"
+LOCAL_ORIGIN=""
+if [ -f "$GEOM" ]; then
+    LOCAL_ORIGIN="$(sed -n 's/^spawn: *\[ *\([-0-9.]*\) *, *\([-0-9.]*\) *\].*/\1,\2/p' "$GEOM")"
+fi
+if [ -z "$LOCAL_ORIGIN" ]; then
+    echo "⚠ 讀不到 $GEOM 的 spawn —— local_origin_map 會留空。"
+    echo "  後果：api/track 帶搜尋環線時會被拒絕（節點算不出 map→NED）。"
+    echo "  解法：python3 $PKG_SRC/scripts/gen_warehouse.py 之後重跑這支。"
+fi
+# 相機俯角要和 x500_cam_down 的模型一致（vision.launch.py 也是依機體選 67）
+CAMERA_PITCH="67.0"
+
 install_one() {
     local name="$1"
     local src="$PKG_SRC/systemd/$name.in"
@@ -78,7 +120,9 @@ install_one() {
     { echo "$MARKER"
       sed -e "s|@WORKSPACE@|$WORKSPACE|g" \
           -e "s|@ROS_SETUP@|$ROS_SETUP|g" \
-          -e "s|@PKG_SRC@|$PKG_SRC|g" "$src"
+          -e "s|@PKG_SRC@|$PKG_SRC|g" \
+          -e "s|@LOCAL_ORIGIN@|$LOCAL_ORIGIN|g" \
+          -e "s|@CAMERA_PITCH@|$CAMERA_PITCH|g" "$src"
     } > "$dst"
     echo "  ✓ $action $dst"
 }
@@ -113,7 +157,29 @@ install_desktop() {
 echo
 echo "安裝服務檔…"
 install_one drone-nodered.service
-install_one drone-sim.service
+install_one drone-warehouse.service
+if [ "$WITH_EMPTY_SIM" = 1 ]; then
+    install_one drone-sim.service
+else
+    # 不裝，而且把以前裝過的清掉 —— 留著會變成「沒有任何按鈕會去按」的孤兒 unit，
+    # 而且 Node-RED 的「系統」分頁已經沒有對應的按鈕了。
+    # 只刪本腳本產生的（第一行有 MARKER），別人手寫的不動。
+    stale="$UNIT_DIR/drone-sim.service"
+    if [ -e "$stale" ]; then
+        if head -1 "$stale" | grep -qF "$MARKER"; then
+            if [ "$DRY_RUN" = 1 ]; then
+                echo "  [dry-run] 會移除已退休的 $stale"
+            else
+                systemctl --user stop drone-sim.service 2>/dev/null || true
+                rm -f "$stale"
+                echo "  ✓ 移除已退休的 drone-sim.service（空白世界）"
+                echo "    要叫回來： $0 --with-empty-sim"
+            fi
+        else
+            echo "  ⚠ $stale 不是本腳本產生的 —— 保留不動"
+        fi
+    fi
+fi
 
 echo
 echo "安裝桌面圖示…"

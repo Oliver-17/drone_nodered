@@ -1,0 +1,463 @@
+# =============================================================================
+#  warehouse_nav2.yaml — 倉庫場景（drone_nodered）的 Nav2 參數
+#
+#  從 drone_nav2_apriltag/config/nav2_params.yaml（arena 版）改來。
+#  兩份結構一樣，差異列在下面 —— 改 arena 那份時想一下這份要不要跟。
+#
+#    項目                      arena        倉庫（這份）
+#    use_sim_time              true         false      ← 沒橋 /clock
+#    local_costmap plugins     obstacle     static     ← x500 沒有光達（W4）
+#    controller_frequency      20 Hz        10 Hz      ← 以下四項 L0 從實機搬來
+#    vx/vy/vθ_samples          20/10/10     10/10/5
+#    bt_loop_duration          10 ms        50 ms
+#    default_server_timeout    20 ms        200 ms     ← 20 會永久卡死
+#    critics                   含 *Align    改用 Twirling
+#
+#  ⚠️ 上面後五項是 2026-10-07（L0）從 drone_bringup/config/real/nav2_params.yaml
+#     搬過來的，全部是 2026-10-06 實機飛場量出來的結果。
+#     刻意**沒有**跟著搬的是速度和容忍度（倉庫 max_vel 1.2 / 容忍 0.4，
+#     倉庫那個 0.8 → 1.2 是 2026-10-12 量過之後改的，見 FollowPath 那一段。
+#     實機 0.3 / 0.2）—— 那是空間大小的差異，不是調校結果。
+#
+#  ⚠️ 為什麼 use_sim_time 要改成 false：
+#     arena 的流程有 ros_gz_bridge 把 Gazebo 的 /clock 橋到 ROS，所以 true 是對的。
+#     但 drone_nodered 的 sim_all.launch.py **沒有** 橋 /clock ——
+#     設 true 的話所有節點的時鐘會永遠停在 0：TF 時間戳是 0、計時器不觸發，
+#     Nav2 看起來啟動了但就是不動，而且**完全不會報錯**。
+#
+#  ⚠️ 這個值不能用 launch 參數覆寫。nav2.launch.py:47 的註解寫得很清楚：
+#     「Nav2 伺服器的 use_sim_time 寫在 params_file 裡」——
+#     那個 launch 參數只影響 RViz 和 goal_tool，不影響 Nav2 的伺服器。
+#     所以必須換整份參數檔。
+#
+#  ⚠️ local_costmap 為什麼用 static_layer 而不是 arena 的 obstacle_layer（W4 決定）：
+#     obstacle_layer 吃 /MAV1/scan。arena 用的 x500_nav2 有光達，
+#     但倉庫用的 x500 / x500_cam_down 都沒有 —— 留著 obstacle_layer 的話區域
+#     costmap 會是全空的，DWB 的 BaseObstacle critic 看不到貨架，
+#     只有 planner 繞得開而 controller 會直接往貨架撞。
+#     改成讀靜態地圖（map_subscribe_transient_local: true）讓 DWB 至少看得到牆。
+#     代價是看不到地圖上沒有的東西（例如那台巡迴的車）—— 要避動態障礙物
+#     得先給飛機裝光達。
+# =============================================================================
+
+# =============================================================================
+#  nav2_params.yaml — Nav2 的參數（S4 起逐步長大）
+#
+#  為什麼放在 drone_nav2_apriltag 而不是節點那包：
+#      裡面的數字幾乎全部跟「場地幾何」綁死 —— costmap 的解析度要配合
+#      gen_arena.py 產生的靜態地圖、inflation_radius 要配合走廊寬度、
+#      光達的量程要配合場地尺寸。換一個場地這整份都要重調。
+#      這符合既定的分界線：「換場地要改的」放這包。
+#
+#  目前進度：
+#      S4 ✅ global_costmap（+ 最小的 planner_server，只為了讓 costmap 跑起來）
+#      S5 ✅ planner_server 的規劃行為
+#      S6 ✅ controller_server / local_costmap / bt_navigator / behavior_server
+#
+#  ⚠️ 為什麼 costmap 一定要由 planner_server 帶起來，不能單獨跑：
+#      nav2_costmap_2d 那支獨立執行檔裡，Costmap2DROS 的註解寫著
+#      「the node will be placed in a namespace equal to the node's name」
+#      （costmap_2d_ros.hpp:83-87）—— 名稱和命名空間都寫死在 C++ 裡，
+#      launch 的 name= / namespace= 和 --ros-args 的 __ns:= 全部蓋不掉，
+#      FQN 永遠是 /costmap/costmap。
+#      同時跑兩個（全域 + 區域）會撞名，兩個都廢掉。
+#
+#      planner_server 會自己建立名為 global_costmap 的子節點，
+#      讀的就是下面 global_costmap: global_costmap: 這一段。
+#      controller_server 同理帶起 local_costmap（S6）。
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+#  全域 costmap —— 涵蓋整個場地，給路徑規劃看全局
+# -----------------------------------------------------------------------------
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+
+      # 1 Hz 就夠。牆不會跑掉，而 40x34 m @ 0.1 m 是 16 萬格，
+      # 更新頻率拉高只是白燒 CPU。
+      update_frequency: 1.0
+      publish_frequency: 1.0
+
+      global_frame: map
+      robot_base_frame: base_link
+
+      # 跟 gen_arena.py 產生的靜態地圖一致。不一致的話 StaticLayer 要重新取樣，
+      # 牆的邊緣會糊掉一格，膨脹層跟著偏。
+      resolution: 0.1
+
+      # rolling_window: false = 固定不動，涵蓋整張地圖。
+      # 尺寸會在 StaticLayer 載入地圖時自動對齊，這裡的值只是初始值。
+      rolling_window: false
+      width: 44
+      height: 38
+
+      # 絕對禁區的半徑。x500 對角（馬達到馬達）約 0.6 m，取 0.5 m 當半徑
+      # 已經含了一點餘裕。
+      # ⚠️ 三機編隊時要改成「整個編隊的外接圓」（約 2.5 m），
+      #    否則 Nav2 會規劃出「長機過得去但僚機撞牆」的路徑。
+      robot_radius: 0.5
+
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /MAV1/scan
+          data_type: "LaserScan"
+          clearing: true
+          marking: true
+
+          # ⚠️⚠️ 這兩行是無人機跟地面機器人最大的差異，也是最容易中的陷阱。
+          #
+          # ObstacleLayer 會把掃到的點轉到世界座標，然後用高度範圍過濾
+          # （observation_buffer.hpp:67-68：「a hitpoint to be considered legal」）。
+          # Nav2 的預設是 max_obstacle_height: 2.0 —— 那是給地面機器人的，
+          # 它的光達裝在離地 0.2 m。
+          #
+          # 我們的光達裝在「飛行高度」上，3 m 飛行時打到牆的點在世界座標是 z≈3 m，
+          # 用預設值會被「整批」濾掉 —— costmap 的障礙物層什麼都看不到，
+          # 而且不會有任何警告，只會覺得「光達好像沒作用」。
+          min_obstacle_height: 0.0
+          max_obstacle_height: 10.0
+
+          # 量程。光達本身是 0.1~30 m，但刻意不用滿：
+          # 無人機加速時會傾斜（2 m/s² 約 11.5 度），傾斜時朝下的光束會打到地板，
+          # 在 3 m 高度約 15 m 處。限制在 12 m 以內就不會把地板當成牆。
+          obstacle_max_range: 12.0
+          raytrace_max_range: 15.0
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # 成本遞減的範圍。不是禁區 —— 只是「不喜歡」，規劃器會盡量走中間。
+        #
+        # 為什麼單機用 1.0 而不是 check_graph.py 的淨空門檻 2.5：
+        # 北道被 pinch 夾到只剩 6 m 寬，用 2.5 的話中間只有 1 m 是低成本區，
+        # Nav2 會「永遠」選南道 —— 那樣就驗不出拓樸圖的 penalty 有沒有在作用了。
+        # ⚠️ 三機編隊時要連 robot_radius 一起調大。
+        inflation_radius: 1.0
+        cost_scaling_factor: 3.0
+
+# -----------------------------------------------------------------------------
+#  區域 costmap —— 跟著飛機移動的小視窗，給即時避障用
+# -----------------------------------------------------------------------------
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+
+      # 20 Hz。區域 costmap 要應付「突然冒出來的東西」，
+      # 而且格數少（6x6 m @ 0.1 m = 3600 格），吃得起這個頻率。
+      update_frequency: 20.0
+      publish_frequency: 5.0
+
+      global_frame: odom
+      robot_base_frame: base_link
+
+      resolution: 0.1
+      rolling_window: true
+
+      # 6x6 m（Nav2 預設是 3x3，給時速很慢的地面機器人）。
+      # 依據：最高 1.5 m/s、DWA 往前模擬約 2 秒 = 3 m，視窗半徑要大於那個距離。
+      width: 6
+      height: 6
+
+      robot_radius: 0.5
+
+      # ⚠️ 2026-10-06 從 ["obstacle_layer", "inflation_layer"] 改成這個。
+      #
+      # arena 的設計是「區域 costmap 只關心眼前有什麼，整張地圖的記憶交給全域
+      # costmap」，所以只放 obstacle_layer 吃光達。那個前提是機體有光達 ——
+      # arena 用的 x500_nav2 有，**但倉庫用的 x500 沒有**。
+      #
+      # 沒有光達又只有 obstacle_layer 的話，區域 costmap 會是**全空的**：
+      #     planner_server 讀全域 costmap → 會規劃繞過貨架 ✓
+      #     controller_server / DWB 讀區域 costmap → 完全不知道有貨架 ✗
+      # 而 DWB 的 BaseObstacleCritic 對致命格是**硬拒絕**（直接丟棄那條軌跡），
+      # 那是真正的安全網 —— 前提是區域 costmap 看得到東西。
+      # 路徑繞過去了但飛機一偏離路徑就沒有任何東西擋它，是最糟的組合。
+      #
+      # Oliver 2026-10-06 選 A 案：「先 A 不要求即時避障」。
+      # 代價：DWB 只看得到地圖上畫的東西，看不到地圖外臨時出現的障礙。
+      # 要即時避障就換 B 案（機體改 x500_nav2，obstacle_layer 就活了）。
+      plugins: ["static_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        # map_server 用 transient local 發佈地圖，訂閱端要對上才收得到，
+        # 否則這一層會永遠是空的（和全域 costmap 的設定一致）。
+        map_subscribe_transient_local: true
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 1.0
+        cost_scaling_factor: 3.0
+
+# -----------------------------------------------------------------------------
+#  全域路徑規劃
+#
+#  S4 只需要它「把 global_costmap 帶起來」，還不會送目標給它。
+#  規劃行為本身是 S5 在驗的。
+# -----------------------------------------------------------------------------
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+
+    GridBased:
+      # NavfnPlanner = 格點上的 Dijkstra / A*。
+      # 不用 SmacPlannerHybrid：那是給「有轉彎半徑限制」的車型用的，
+      # 無人機可以原地橫移，用它只是自找麻煩。
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      # 目標被障礙物佔住時，允許規劃到這個距離內的替代點
+      tolerance: 0.5
+      # false = Dijkstra。場地只有 40x34 m，A* 省下的時間可以忽略，
+      # 而 Dijkstra 的路徑比較平滑（A* 會偏向啟發式的方向，容易貼著障礙物）。
+      use_astar: false
+      # 不准穿過「沒有資料」的區域。地圖邊界之外就是未知，
+      # 這一條等於替我們把規劃範圍鎖在地圖內。
+      allow_unknown: false
+
+# -----------------------------------------------------------------------------
+#  地圖伺服器
+# -----------------------------------------------------------------------------
+map_server:
+  ros__parameters:
+    use_sim_time: false
+    # 實際路徑由 launch 填入（要用 get_package_share_directory 展開）
+    yaml_filename: ""
+
+
+# -----------------------------------------------------------------------------
+#  區域控制（S6）—— 這一層才會真的讓飛機動
+#
+#  它同時會建立 local_costmap 這個子節點（讀上面那段參數）。
+# -----------------------------------------------------------------------------
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    # ⚠️ 2026-10-07：20.0 → 10.0，和實機那份對齊
+    #    （drone_bringup/config/real/nav2_params.yaml）。
+    #    這個頻率是 DWB 運算量的乘數：每一拍都要把 vx×vy×vθ 條候選軌跡
+    #    各自往前模擬 sim_time 再用每個 critic 打分。
+    #    這裡會跟著改不是因為開發機 CPU 不夠，而是因為倉庫這套的用途是
+    #    「實機飛之前的排練」—— 控制頻率不同，在模擬裡調出來的手感就搬不過去。
+    controller_frequency: 10.0
+
+    # ⚠️ 這一格是無人機和地面機器人最大的差異。
+    #    Nav2 預設是 0.5 —— 意思是「y 方向速度小於 0.5 就當成 0」，
+    #    因為差速輪機器人根本不能橫移，那個值是雜訊。
+    #    無人機可以橫移，用預設值會把所有小幅度的側向修正全部歸零，
+    #    飛起來會變成「只會前進和轉頭」的笨重車。
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      # 多久之內至少要移動這麼多，否則判定卡住。
+      # 無人機起步比輪型機器人慢（要先傾斜才會有水平加速度），所以放寬到 15 秒。
+      required_movement_radius: 0.5
+      movement_time_allowance: 15.0
+
+    general_goal_checker:
+      stateful: true
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.4
+      # 航向不設限：飛機是全向的，到了就好，不需要轉到特定角度。
+      # 設小的話 DWB 會在終點原地轉半天。
+      yaw_goal_tolerance: 3.14
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: true
+
+      # --- 速度上限 ---
+      #
+      # ⚠️ 2026-10-12：0.8 → 1.2（Oliver 問「導航可不可以跟巡航一樣快」）。
+      #    原本的 0.8 不是調校結果，是「第一次飛先保守」的暫定值。
+      #    實測見 test/tools/run_goto_bench.sh（起飛點 → map (5.6, 7.0)）。
+      #
+      # 為什麼停在 1.2 而不是更高 —— 有兩個硬天花板：
+      #   ① 1.5 m/s：cmd_vel_to_px4_node 的 max_speed_xy（px4_bridge.yaml）
+      #      會把超出的夾掉（cmd_vel_to_px4_node.cpp:340）。夾掉之後 DWB 的
+      #      預測模型就和飛機實際的動作不符，會比慢更糟 —— 和下面
+      #      max_vel_theta 那一條是同一個坑。
+      #   ② 區域 costmap 只有 6x6 m：sim_time 2.0 秒 x 1.2 = 2.4 m，
+      #      還在半寬 3 m 以內。設 1.5 就剛好用滿，等於模擬到看不見的地方。
+      #
+      # ⚠️ 巡航（api/patrol）和追蹤（api/track）的 2.0 m/s 是**另一條路**，
+      #    不要拿來當這裡的目標值：那兩個送 DO_REPOSITION 由 PX4 自己的
+      #    navigator 飛，不經過 cmd_vel 和那座橋，所以不受上面兩個天花板限制。
+      min_vel_x: -1.2
+      max_vel_x: 1.2
+      # ⚠️ Nav2 預設 max_vel_y 是 0.0（差速車不能橫移）。
+      #    照抄的話無人機就浪費了全向的能力。
+      min_vel_y: -1.2
+      max_vel_y: 1.2
+      # 不跟著調：橋的 max_yawspeed 是 1.0，而且走道只有 4 m 寬，
+      # 轉太快在這裡沒有好處（理由見下面 critics 那一段）。
+      max_vel_theta: 0.8
+      min_speed_xy: 0.0
+      max_speed_xy: 1.2
+      min_speed_theta: 0.0
+
+      # 加速度上限。無人機靠傾斜產生水平加速度，給太大會要求很大的傾角。
+      #
+      # ⚠️ 2026-10-12：1.0 → 1.5，和上面的速度一起調。
+      #    只提速度上限不提加速度是白調的：acc 1.0 要 1.2 秒、滑行 0.72 m
+      #    才加得到 1.2 m/s，在 4 m 寬的走道裡短程移動根本到不了新上限。
+      #    1.5 m/s² 約 8.7 度傾角（1.0 約 6 度）。
+      #
+      #    實機那份不能跟著放寬 —— 那邊的理由是「傾角大光達會打到地板」
+      #    （S4 的坑）。倉庫的 x500_cam_down **沒有光達**（這也正是區域
+      #    costmap 改用 static_layer 的原因），所以這裡可以比實機寬。
+      #
+      #    煞停距離：1.2 m/s 配 decel 1.5 → 0.48 m，xy_goal_tolerance 是 0.4。
+      acc_lim_x: 1.5
+      acc_lim_y: 1.5
+      acc_lim_theta: 2.0
+      decel_lim_x: -1.5
+      decel_lim_y: -1.5
+      decel_lim_theta: -2.0
+
+      # 取樣數。⚠️ 2026-10-07：20/10/10（2000 條）→ 10/10/5（500 條），
+      # 和實機那份對齊。
+      #   vx 和 vy 改成對稱（都 10）—— 四旋翼是全向的，沒有理由「往前」的
+      #     解析度比「橫移」高一倍。原本的不對稱是從地面車預設抄來的
+      #     （差速車不能橫移，vy_samples 通常是 1）。
+      #   vθ 砍最多（10→5）—— yaw_goal_tolerance 是 3.14，代表完全不在乎
+      #     最終機頭朝向，加上下面新增的 Twirling 本來就會壓低轉速，
+      #     這一軸最不需要解析度。
+      vx_samples: 10
+      vy_samples: 10
+      vtheta_samples: 5
+      # 每條候選軌跡往前模擬幾秒。2.0 秒 x 1.2 m/s = 2.4 m，
+      # 小於 local_costmap 的半寬 3 m，不會模擬到看不見的地方。
+      # ⚠️ 速度再往上調就要一起看這一行（1.5 m/s 剛好用滿 3 m）。
+      sim_time: 2.0
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.3
+      xy_goal_tolerance: 0.4
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+
+      # 打分用的 critic。拿掉 RotateToGoal ——
+      # 那是逼機器人「轉到目標朝向」才算到達，對全向的無人機沒有意義，
+      # 留著會讓它在終點原地打轉。
+      #
+      # ⚠️ 2026-10-07：再拿掉 PathAlign 和 GoalAlign，換成 Twirling。
+      # 這是 2026-10-06 實機飛場量出來的，不是模擬調的。
+      #
+      # 為什麼：那兩個 critic 評分的不是「飛機在哪」，而是「機頭前方
+      # forward_point_distance 那一點在哪」——
+      #     dwb_critics/alignment_util.hpp 的 getForwardPose()：
+      #       "Projects the given pose forward the specified distance in the
+      #        x direction. (used in both path_align and dist_align)"
+      #     dwb_critics/path_align.hpp：class PathAlignCritic : public PathDistCritic
+      # 那個投影點永遠在機體 +x，所以「目標在機頭後方」會被重扣分，
+      # 而唯一解除的方法是轉大約 180°。但：
+      #     max_vel_theta 0.8 rad/s → 轉 180° 要 3.9 秒
+      #     sim_time 2.0 s          → DWB 一次只看 2 秒，最多轉 92°
+      # 轉的報酬永遠在視野之外，倒退的扣分卻是立刻的 → 轉一半又放棄，來回擺。
+      #
+      # 實機三個目標的數據（上限 0.3 m/s）：
+      #     目標在正前方   0.29 m/s  ✓
+      #     目標在側面     0.33 m/s  ✓ 橫移沒問題
+      #     目標在後方     0.15 m/s  ✗ 只有一半，航向白擺了 40°
+      # 「側面很順、只有後方不順」就是前方投影點不對稱的指紋。
+      #
+      # 倉庫這邊更要拿掉：走道只有 4 m 寬（AISLE_WIDTH），機頭來回擺動在
+      # 那種寬度裡會直接擺到貨架的膨脹層裡。
+      #
+      # 我們的飛機是全向的、相機朝下、yaw_goal_tolerance 是 3.14
+      # （終點朝向不在乎），所以「過程中的朝向」也不該被優化。
+      # Twirling 正是為這件事寫的 ——
+      #     dwb_critics/twirling.hpp：
+      #       "with holonomic or near-holonomic robots, sometimes a robot spins
+      #        more than you'd like on its way to a goal. This class provides a
+      #        way to assign a penalty purely to rotational velocities."
+      #
+      # ⚠️ 不要改成「提高 max_vel_theta 讓它轉得完」—— cmd_vel_to_px4_node 的
+      #    max_yawspeed 會把超出的部分夾掉，DWB 的預測模型就和現實不符，會更亂。
+      #    模擬版 max_yawspeed 是 1.0（drone_control/config/px4_bridge.yaml），
+      #    所以 0.8 還有餘裕；真要往上調必須兩邊一起調。
+      #
+      # 路徑跟隨改成只靠 PathDist（評分飛機自己的位置），不靠 PathAlign。
+      critics: ["Oscillation", "BaseObstacle", "PathDist", "GoalDist", "Twirling"]
+      BaseObstacle.scale: 0.02
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      # Nav2 預設是 0.0（關閉）。沒有它的話偏航完全不影響分數，DWB 會在等分的
+      # vtheta 樣本裡隨便挑一個 → 機頭亂轉。這個值是相對於 PathDist 的 32 取的，
+      # 太大會讓它寧可不轉也不修路徑，太小等於沒加。
+      Twirling.scale: 10.0
+
+# -----------------------------------------------------------------------------
+#  行為樹導航（S6）—— RViz 的「2D Goal Pose」由它接收
+# -----------------------------------------------------------------------------
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    # px4_tf_node 會發這個（S6 新增）
+    odom_topic: /MAV1/odom
+    # ⚠️ 2026-10-07：10 → 50（行為樹從 100 Hz 降到 20 Hz）。
+    bt_loop_duration: 50
+    # ⚠️ 2026-10-07：20 → 200。這一項是 bug fix，和 CPU 無關。
+    #
+    # 單位是毫秒（nav2_behavior_tree/bt_action_server_impl.hpp:119-120 把它
+    # 餵給 std::chrono::milliseconds）。20 ms 是「等 action server 回應
+    # goal 被接受」的上限，在負載下本來就不夠。
+    #
+    # 超時的後果不是重試，而是永久卡死：
+    #     nav2_behavior_tree/bt_action_node.hpp:219-228
+    #       future_goal_handle_.reset();  return BT::NodeStatus::FAILURE;
+    # 行為樹把 handle 丟掉了，但那個 goal 還是會送到 server 並被接受 ——
+    # 變成沒有人認領的孤兒 goal，之後每一拍都印 "Aborting handle"，
+    # 只能重開整個 Nav2。2026-10-06 實機就是這樣死在第三個目標。
+    #
+    # 倉庫這邊更不能留 20：L4 的視覺追蹤本質是「~1 Hz 不斷重送目標」，
+    # 那正是最容易觸發這個超時的用法。
+    default_server_timeout: 200
+    wait_for_service_timeout: 1000
+
+# -----------------------------------------------------------------------------
+#  復原行為（S6）—— 卡住時原地轉、後退
+# -----------------------------------------------------------------------------
+behavior_server:
+  ros__parameters:
+    use_sim_time: false
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_tolerance: 0.3
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.8
+    min_rotational_vel: 0.2
+    rotational_acc_lim: 2.0

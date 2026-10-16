@@ -12,6 +12,9 @@
 #        我們產生的（會被換掉）：無人機控制、系統、任務、零件庫，和三個積木的定義
 #        使用者自己的（保留）  ：他自己新增的分頁、自己建的設定節點
 #
+#        使用者放在自己分頁上的**動作積木**也保留 —— 積木的定義會換成新版，
+#        但他拉出來的那個實例（含他填的參數、接的線）原地不動
+#
 #  ⚠️ 例外：如果東西是加在「我們的分頁裡面」，更新時會跟著那一頁被換掉。
 #     所以說明裡會叫使用者把自己的東西放在新分頁。
 # =============================================================================
@@ -60,9 +63,16 @@ def merge(new_nodes, cur_nodes):
         ours = n["id"] in ids or n.get("z") in containers
         if n["type"] in ("tab", "subflow"):
             ours = ours or is_ours(n, ids, labels)
-        # 指向本專案積木的實例（包含匯入時複製出來的那份）也要清掉
-        if n["type"].startswith("subflow:") and n["type"][8:] in containers:
-            ours = True
+        # 積木的「實例」（使用者從左側面板拖出來的那一個）要不要清掉，
+        # 看它指向的定義**更新後還在不在**：
+        #   在（id 相同、只是內容換新）→ 留著。使用者放在自己分頁上的積木
+        #     不能因為更新就消失（2026-09-28 發現「自訂任務」分頁的積木被清光）
+        #   不在（匯入時複製出來的副本，Node-RED 會重新配 id）→ 連實例一起清，
+        #     不然會留下指向不存在定義的壞節點
+        if n["type"].startswith("subflow:"):
+            sid = n["type"][8:]
+            if sid in containers and sid not in ids:
+                ours = True
         if ours:
             dropped += 1
             continue

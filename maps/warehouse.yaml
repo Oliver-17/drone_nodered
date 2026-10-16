@@ -1,0 +1,13 @@
+# === 這個檔案是產生出來的，不要手改 ===
+# 來源：drone_nodered/scripts/gen_warehouse.py，改幾何請改那支再重跑。
+#
+# 給 nav2_map_server 載入，再由 costmap 的 StaticLayer 使用。
+# origin 是「左下角」的世界座標（x 最小、y 最小），第三個數字是 yaw。
+image: warehouse.pgm
+resolution: 0.100000
+origin: [-19.250000, -13.250000, 0.000000]
+negate: 0
+# 門檻沿用 nav2 範例地圖的值。我們只產生 0 和 254 兩種像素，
+# 所以落在門檻之間的「未知」不會出現。
+occupied_thresh: 0.65
+free_thresh: 0.196

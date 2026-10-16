@@ -65,8 +65,13 @@ remove_desktop() {
 }
 
 echo "移除服務…（只動有本專案標記的檔案）"
-# 先移除模擬：它 PartOf 底座，底座先停的話模擬會被連帶停掉，順序反了不影響結果，
-# 但這樣訊息比較好讀
+# 先移除場景服務：它們 PartOf 底座，底座先停的話會被連帶停掉，順序反了不影響結果，
+# 但這樣訊息比較好讀。
+#
+# ⚠️ drone-sim.service 2026-10-12 退休（Oliver 說舊地圖不用了），預設不再安裝 ——
+#    但這裡**還是要試著移除**：使用者可能是從舊版升上來的、或自己帶了
+#    --with-empty-sim 裝回去。remove_one 對不存在的檔案是安靜略過。
+remove_one drone-warehouse.service
 remove_one drone-sim.service
 remove_one drone-nodered.service
 

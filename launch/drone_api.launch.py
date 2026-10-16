@@ -33,6 +33,18 @@ def generate_launch_description():
                               description="剩餘電量低於這個比例就自動降落（0~1）"),
         DeclareLaunchArgument("altitude_margin_m", default_value="1.0",
                               description="高度超過上限這麼多就算失控爬升"),
+        # api/track 的搜尋環線用 map 座標，節點要知道「PX4 本地原點在 map 的哪裡」
+        # 才換算得出來。⚠️ 必須和 px4_bridge 的 odom_origin 完全相同。
+        # 空字串 = 沒有這個資訊 → 只能用原地轉頭掃描（會明確拒絕帶環線的請求）。
+        DeclareLaunchArgument("local_origin_map", default_value="",
+                              description='PX4 本地原點在 map 的座標，"x,y"。'
+                                          "要和 px4_bridge 的 odom_origin 一致"),
+        # 相機俯角（度）。只用來算 api/track 的 distance=0「最佳跟隨距離」
+        # （= 高度 / tan(俯角)，光軸打到地面的位置）。
+        # ⚠️ 要和 vision.launch.py 的 camera_pitch 一致：
+        #    x500_cam_down → 67、x500_depth_tilt → 45。
+        DeclareLaunchArgument("camera_pitch_deg", default_value="67.0",
+                              description="相機安裝俯角（度）。算最佳跟隨距離用"),
         DeclareLaunchArgument("watchdog_debounce_s", default_value="1.0",
                               description="異常要連續成立這麼久才動作，避免瞬間雜訊誤觸發"),
         Node(
@@ -54,6 +66,10 @@ def generate_launch_description():
                     LaunchConfiguration("altitude_margin_m"), value_type=float),
                 "watchdog_debounce_s": ParameterValue(
                     LaunchConfiguration("watchdog_debounce_s"), value_type=float),
+                # 字串參數不用 ParameterValue 包 —— value_type 推斷本來就會是 str
+                "local_origin_map": LaunchConfiguration("local_origin_map"),
+                "camera_pitch_deg": ParameterValue(
+                    LaunchConfiguration("camera_pitch_deg"), value_type=float),
             }],
             output="screen", emulate_tty=True,
         ),

@@ -15,8 +15,13 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>drone_nodered_interfaces</exec_depend>
+  <!-- api/goto 用 NavigateToPose 這個 action -->
+  <exec_depend>nav2_msgs</exec_depend>
   <!-- 流程要透過 rosbridge 跟 ROS 2 溝通，積木也來自這個套件 -->
   <exec_depend>nodered_ros2</exec_depend>
+  <!-- 視覺任務：把 Gazebo 的影像搬進 ROS，偵測和定位在 drone_vision -->
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>drone_vision</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
