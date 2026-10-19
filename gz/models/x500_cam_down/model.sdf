@@ -49,10 +49,23 @@
   刻意和 PX4 / x500_depth_tilt 一致（IMX214、StereoOV7251、topic depth_camera），
   這樣 vision.launch.py 的 topic 路徑只要換模型名字，結構不用改。
 
-  ⚠️ 相機俯角改了的話，**三個地方**要一起改（不是兩個）：
-        這個檔案的 camera_link / CameraJoint 的 <pose>
-        launch/vision.launch.py 的 camera_pitch 參數
-        scripts/target_world_node.py 的 camera_pitch_deg 預設
+  ⚠️ 相機的 <pose> 改了的話，**俯角和安裝高度是兩組獨立的值**，各自有下游：
+
+        俯角（pose 的第 5 個數字）
+            launch/sim_all.launch.py     的 camera_pitch     （依 model 自動選）
+            launch/warehouse_all.launch.py 的 camera_pitch_deg（給 api/track 算跟隨距離）
+            scripts/target_world_node.py 的 camera_pitch_deg 預設
+
+        安裝高度（pose 的第 3 個數字）
+            launch/sim_all.launch.py     的 camera_mount_z   （依 model 自動選）
+            scripts/target_world_node.py 的 camera_z_m 預設
+
+     ⚠️ 安裝高度兩個機體是**反號**的，不是只差大小 ——
+        這個機體的相機垂在機身**下方**（SDF -.18 → FRD +0.18），
+        x500_depth_tilt 的相機在機身**上方**（SDF +.242 → FRD -0.242）。
+        2026-10-16 之前這個值從來沒傳下去，節點一律用 -0.242，
+        等於用 depth_tilt 的幾何去算這台：相機離地高估 0.422 m（15%），
+        算出來的目標位置固定往遠處偏，**而且不會報錯**。
 ============================================================================= -->
 <sdf version='1.9'>
   <model name='x500_cam_down'>

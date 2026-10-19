@@ -70,6 +70,13 @@ def generate_launch_description():
         #   x500_cam_down   → 67.0（1.1694 rad）
         DeclareLaunchArgument("camera_pitch", default_value="45.0",
                               description="相機俯角（度）。要和機體模型的 camera_link 一致"),
+        # 相機在機體 FRD 的安裝高度（z 下為正）。**兩個機體是反號的**：
+        #   x500_cam_down    +0.18   相機垂在機身下方（SDF 寫 -.18，FLU）
+        #   x500_depth_tilt  -0.242  相機在機身上方（SDF 寫 +.242）
+        # 預設沿用 target_world_node 的原值（depth_tilt），由 sim_all 依 model 覆寫。
+        # ⚠️ 傳錯的症狀是「目標位置固定偏一個方向」，不會有任何錯誤訊息。
+        DeclareLaunchArgument("camera_mount_z", default_value="-0.242",
+                              description="相機在機體 FRD 的 z（公尺，下為正）"),
         DeclareLaunchArgument("namespace", default_value="MAV1"),
         DeclareLaunchArgument("debug_image", default_value="true",
                               description="要不要發布畫了框的影像（RViz 看得到）"),
@@ -149,6 +156,8 @@ def generate_launch_description():
              parameters=[{"px4_namespace": LaunchConfiguration("namespace"),
                           "camera_pitch_deg": ParameterValue(
                               LaunchConfiguration("camera_pitch"), value_type=float),
+                          "camera_z_m": ParameterValue(
+                              LaunchConfiguration("camera_mount_z"), value_type=float),
                           "target_height_m": ParameterValue(
                               LaunchConfiguration("target_height"), value_type=float)}]),
 

@@ -80,6 +80,25 @@ def generate_launch_description():
                 ["'67.0' if '", LaunchConfiguration("model"),
                  "' == 'x500_cam_down' else '45.0'"]),
             description="相機俯角（度）。預設跟著 model 走，不用自己記兩者要配對"),
+        # 相機在機體 FRD（x 前、y 右、**z 下為正**）的安裝高度。
+        #
+        # ⚠️ 這個值兩個機體是**反號**的，不是只差大小：
+        #       x500_cam_down    SDF .12 0 -.18   相機垂在機身**下方** → FRD +0.18
+        #       x500_depth_tilt  SDF .12 0 +.242  相機在機身**上方**   → FRD -0.242
+        #    （SDF 的 pose 是 FLU，z 上為正；FRD 是 z 下為正，所以要反號。）
+        #
+        # ⚠️ 2026-10-16 之前這個值**從來沒有傳下去**，target_world_node 一律用
+        #    它自己的預設 -0.242 —— 也就是用 depth_tilt 的值去算 cam_down 的幾何。
+        #    差 0.422 m：節點以為相機離地 3.242 m，實際只有 2.82 m，高估 15%，
+        #    射線和地面的交點就跟著往遠處偏。**而且完全不會報錯**，
+        #    只會看到「算出來的目標位置固定偏一個方向」。
+        #    和 camera_pitch 一樣要在**外層**宣告（model 之後會被改寫成 _0 版本）。
+        DeclareLaunchArgument(
+            "camera_mount_z",
+            default_value=PythonExpression(
+                ["'0.18' if '", LaunchConfiguration("model"),
+                 "' == 'x500_cam_down' else '-0.242'"]),
+            description="相機在機體 FRD 的 z（公尺，下為正）。預設跟著 model 走"),
         # 用哪個偵測器。color 找洋紅方盒、yolo 認真車外觀 ——
         # 要和世界裡的目標對得上（gen_warehouse.py 的 --target 決定世界裡是哪一台）。
         DeclareLaunchArgument("detector", default_value="color",
@@ -147,6 +166,8 @@ def generate_launch_description():
                     # 這裡只是把它轉交進去。不能在這裡用 LaunchConfiguration("model")
                     # 重算 —— 上一行已經把 model 改寫成「_0」版本了。
                     "camera_pitch": LaunchConfiguration("camera_pitch"),
+                    # 和 camera_pitch 同一個理由：值在外層算好，這裡只轉交
+                    "camera_mount_z": LaunchConfiguration("camera_mount_z"),
                     # detector 一路轉交到 vision.launch.py。那邊會依它挑偵測器節點，
                     # 以及 target_world 的 target_height_m（兩種目標的中心高度不同）。
                     "detector": LaunchConfiguration("detector"),
