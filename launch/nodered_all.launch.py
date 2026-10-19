@@ -81,6 +81,20 @@ def generate_launch_description():
 
                                           "distance=0 用它算最佳跟隨距離"),
 
+        # api/track 的**跟隨段**是 cmd_vel 直通 offboard、不經過 Nav2 ——
+        # 那一段沒有 costmap、沒有膨脹層、沒有任何避障。
+        # 2026-10-19 摔機一次（站位點算錯方向，滿速往西開 1.9 秒撞上貨架）。
+        # 空字串 = 沒有保險（節點啟動時會印黃色警告）。
+        # 底座是獨立服務，warehouse_all 內部那條線接不到這裡 ——
+        # 值由 scripts/install_services.sh 從 warehouse_geometry.yaml 填進
+        # drone-nodered.service 的 ExecStart。
+
+        DeclareLaunchArgument("no_fly_boxes", default_value="",
+
+                              description="跟隨段的禁飛方框，map 座標攤平成一串，"
+
+                                          "每 4 個一組 x_min,y_min,x_max,y_max"),
+
         DeclareLaunchArgument("rosbridge", default_value="true"),
         DeclareLaunchArgument("drone_api", default_value="true"),
         DeclareLaunchArgument("nodered", default_value="true"),
@@ -105,13 +119,17 @@ def generate_launch_description():
                 "target_system": LaunchConfiguration("target_system"),
                 "min_takeoff_altitude": LaunchConfiguration("min_takeoff_altitude"),
                 "max_takeoff_altitude": LaunchConfiguration("max_takeoff_altitude"),
-                # 場景參數（2026-10-08）。底座服務是「不知道場景」的，所以這兩個
-                # 由啟動的人注入 —— drone-nodered.service 的 ExecStart 帶進來，
+                # 場景參數（2026-10-08、2026-10-19 加第三個）。底座服務是
+                # 「不知道場景」的，所以這些由啟動的人注入 ——
+                # drone-nodered.service 的 ExecStart 帶進來，
                 # 值由 install_services.sh 從 warehouse_geometry.yaml 填。
                 # ⚠️ local_origin_map 必須和 px4_bridge 的 odom_origin 相同，
                 #    不一致時 api/track 的搜尋航點會整組平移且**不會報錯**。
+                # ⚠️ no_fly_boxes 漏掉的話跟隨段完全沒有避障（見上面的說明）。
+                #    節點啟動會印黃色警告，不要忽略它。
                 "local_origin_map": LaunchConfiguration("local_origin_map"),
                 "camera_pitch_deg": LaunchConfiguration("camera_pitch_deg"),
+                "no_fly_boxes": LaunchConfiguration("no_fly_boxes"),
             }.items(),
             condition=IfCondition(LaunchConfiguration("drone_api")),
         ),

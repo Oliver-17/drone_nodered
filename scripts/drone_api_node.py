@@ -66,7 +66,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from px4_msgs.msg import (BatteryStatus, FailsafeFlags, VehicleCommand, VehicleCommandAck,
                           VehicleGlobalPosition, VehicleLandDetected, VehicleLocalPosition,
                           VehicleStatus)
-from geometry_msgs.msg import PointStamped, PoseStamped
+from geometry_msgs.msg import PointStamped, PoseStamped, Twist
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
@@ -145,9 +145,47 @@ TRACK_SEARCH_LAPS = 2
 TRACK_SPEED_MPS = 2.0
 # 目標速度低於這個值就當它沒在動（站位點退回「沿飛機→目標連線」的算法）。
 TRACK_MIN_TARGET_SPEED = 0.15
+
+# --- 跟隨階段的速度控制（2026-10-16 從 DO_REPOSITION 改過來）-------------------
+#
+# ⚠️ 為什麼非改不可：DO_REPOSITION 是「飛到那個點然後停」，目標在動就必定
+#    反覆衝刺。2026-10-15 量化過：飛機 100% 的時間落在車正後方、側向只偏 0.27 m
+#    （跟得很準），但距離比設定值多 1.25 m —— 除以車速 0.5 m/s 正好是
+#    **2.5 秒的反應延遲**。那是架構造成的，不是參數：2026-10-08 試過把更新率
+#    拉到 5 Hz、縮小容差、調 PX4 的加速度和加加速度限制，Oliver 實測
+#    「暴衝急剎」完全沒有改善，全部還原。
+#    速度控制沒有「終點」這個概念，所以不會有停下來再起步的週期。
+#
+# 跟隨改走 <ns>/cmd_vel → cmd_vel_to_px4_node → offboard，和 Nav2 同一條路。
+# ⚠️ 搜尋階段仍然用 DO_REPOSITION（AUTO 模式）—— 那一段是「飛到航點」，
+#    本來就該用位置控制，而且已經驗過。兩種模式的切換見 _track_worker。
+TRACK_CMD_HZ = 10.0          # cmd_vel 的發送頻率。PX4 要求 offboard setpoint > 2 Hz，
+                             # bridge 以 20 Hz 轉發，這裡 10 Hz 有五倍餘裕。
+TRACK_KP = 1.2               # 位置誤差（m）→ 速度（m/s）的比例增益。
+                             # 誤差 1 m 時給 1.2 m/s，由 TRACK_FOLLOW_SPEED 封頂。
+# 跟隨階段的速度上限。**不能用 TRACK_SPEED_MPS（2.0）** ——
+# 那是給搜尋段的 DO_REPOSITION 用的，那條路不經過 bridge。
+# 跟隨走 cmd_vel，而 cmd_vel_to_px4_node 的 max_speed_xy 會再夾一次：
+#       模擬 config/px4_bridge.yaml      1.5
+#       實機 config/real/px4_bridge.yaml 0.5（室內刻意壓低）
+# 設超過那個值不會比較快，只會讓「設定值」和「實際飛的速度」對不起來。
+# 1.4 留一點餘裕，不要剛好壓在上限上。
+TRACK_FOLLOW_SPEED = 1.4
+TRACK_YAW_KP = 1.5           # 機頭誤差（rad）→ 角速度（rad/s）
+TRACK_MAX_YAWRATE = 0.7      # rad/s ≈ 40°/s。PX4 的 MPC_YAWRAUTO_MAX 預設 45°/s，
+                             # 命令超過飛機轉得動的速度沒有意義。
+# 從「跟隨」切回「搜尋」時要等多久才發 DO_REPOSITION。
+# ⚠️ cmd_vel_to_px4_node 的 ensureOffboard() 只要 cmd_timeout_s（預設 0.5 秒）
+#    內收到過 cmd_vel，就會主動把 PX4 拉回 OFFBOARD。沒等就送 DO_REPOSITION
+#    的話，AUTO 和 OFFBOARD 會互搶 —— 而且不會有任何錯誤訊息。
+#    這和 _settle_after_cancel 處理 nav 的理由完全一樣。
+TRACK_MODE_SWITCH_S = 0.8
 # 站位點離飛機超過這麼遠才重送指令。太小會每秒都在送、讓 navigator 抖動。
 # ⚠️ 2026-10-08 試過 0.1 想讓指令連續一點，實測對晃動沒有改善（見
 #    TRACK_UPDATE_S 的說明），已還原。
+# ⚠️ 2026-10-16 起**沒有人在用**。跟隨改成速度控制之後不再需要「到位就不送」
+#    這個閘門（每一拍都送 cmd_vel，誤差小時比例控制自然給小速度）。
+#    留著是為了讓下面那段歷史註解讀得懂，要調跟隨行為請看 TRACK_KP。
 TRACK_GOAL_TOL_M = 0.3
 # 估目標速度用多長的時間窗。太短會被偵測雜訊放大，太長會跟不上轉向。
 TRACK_VEL_WINDOW_S = 1.0
@@ -158,8 +196,73 @@ TRACK_VEL_WINDOW_S = 1.0
 #    全部還原。結論：問題不在調參，而在「用位置設定點追移動目標」這個架構 ——
 #    每一道 DO_REPOSITION 都是「衝到那個點然後停」，目標在動就必定反覆衝刺。
 #    要治本得改成速度控制（見檔頭的「追蹤架構」說明）。
-TRACK_UPDATE_S = 1.0        # 地面車很慢，1 秒綽綽有餘，
-                            # 而且每次都是一個完整的 DO_REPOSITION，不需要高頻
+# ⚠️ 2026-10-16 拆成兩個節拍。跟隨改成速度控制之後，兩段的需求完全相反：
+#      跟隨  要高頻 —— cmd_vel 斷流超過 bridge 的 cmd_timeout_s（0.5 秒）
+#                      就會被收回控制權
+#      搜尋  要低頻 —— 每一拍是一道完整的 DO_REPOSITION，而且原地掃描是
+#                      「每拍把機頭轉 TRACK_SCAN_STEP_DEG 度」設計的；
+#                      照 10 Hz 跑會變成每秒轉 300°
+TRACK_UPDATE_S = 1.0 / TRACK_CMD_HZ   # 迴圈節拍（0.1 秒）
+TRACK_SEARCH_TICK_S = 1.0             # 搜尋段多久才真正動一次
+
+# --- 鎖定交接的保險（2026-10-19 加，起因是撞貨架摔機）------------------------
+#
+# 🔴 那次摔機的完整過程（從 PX4 的飛行記錄 02_46_33.ulg 還原）：
+#      66.6 s  鎖定 → OFFBOARD 接手。那一刻飛機正以 **3.2 m/s 往北**飛
+#              （搜尋段的 DO_REPOSITION，PX4 自己算到 4.40 m/s），
+#              第一則 cmd_vel 是 1.40 → PX4 抬頭 **22.7°** 硬煞。
+#      67.6 s  站位點算在飛機西邊 → 指令變成**滿速 1.40 m/s 往西**，
+#              連續 1.9 秒，從 map x=+5.32 一路推到 +3.78。
+#      68.6 s  撞上第 2 排貨架的東面（x=+3.6），翻覆，從 5 m 高墜地。
+#
+#    為什麼站位點會跑到西邊：站位點 = 車的位置 − v̂方向 × dist。
+#    鎖定那一刻 _target_hist 只有兩三筆、間隔 0.2~0.3 秒，而且正好落在那個
+#    22.7° 的姿態劇變裡 —— v̂ 的方向是純雜訊。它指東，站位點就落在車西邊
+#    dist 公尺（5 m 高時 dist = 5/tan67° = 2.12 m），剛好是貨架。
+#
+# 下面幾個常數各擋一段。真正防摔的是禁飛方框（見 _clamp_no_fly），
+# 這幾個是讓「算錯」不要那麼容易發生。
+TRACK_VEL_MIN_WINDOW_S = 0.6   # 估車速的時間窗至少要這麼長才採用。
+                               # 原本的門檻是 0.2 秒 —— 太鬆，正好放過上面那次。
+TRACK_VEL_MIN_SAMPLES = 4      # 而且窗內至少要這麼多筆。偵測約 15 Hz，
+                               # 0.6 秒會有 9 筆左右，4 筆是很寬鬆的下限。
+                               # 不足就回 (0,0) → 站位點退回「沿視線前後」，
+                               # 那個算法只會朝車或離開車，絕對不會橫移進貨架。
+TRACK_HANDOFF_RAMP_S = 1.0     # 接手後速度上限從 0 線性拉到 TRACK_FOLLOW_SPEED
+                               # 要花多久。治的是上面那個「抬頭 22.7° 硬煞」。
+                               # ⚠️ 這一項同時也在幫 TRACK_VEL_MIN_WINDOW_S：
+                               #    硬煞造成的姿態劇變本身就是 v̂ 變成雜訊的原因
+                               #    （target_world_node 用最新姿態配舊影像），
+                               #    不硬煞，前 0.6 秒的偵測資料才乾淨。
+# --- 站位方向的平滑（2026-10-19 加，治「左右搖擺」和「鎖定時抽動」）----------
+#
+# 🔴 站位點 = 車的位置 − v̂方向 × dist，所以它**剛性地掛在估出來的車行方向上**。
+#    前後那一軸被 dist 鎖住（所以前進指令很穩），橫向那一軸沒有任何東西鎖住
+#    —— 方向一變，站位點就繞著車瞬移，最多 2×dist。
+#
+#    2026-10-19 從節點自己的 log 量到的（車是**直線**往北走，真實方向 0°）：
+#        車向 -7  → 左-0.55        車向 +9  → 左+0.35
+#        車向 -11 → 左-0.59        車向 +12 → 左+0.76
+#        車向 -12 → 左-0.70        車向 +14 → 左+0.75
+#    方向每半秒在 ±13° 之間翻邊，橫向速度指令一比一跟著翻。
+#    幅度對帳：2.12 × sin(13°) × 1.2 = 0.57 m/s，量到的峰值 0.70~0.76 —— 吻合。
+#    而機頭差一直在 ±5° 內、轉速大多是 0 → **機頭完全沒在抖**，不是 yaw 的問題。
+#
+#    同一個機制還造成兩件事：
+#      鎖定時抽動  車速在 TRACK_MIN_TARGET_SPEED 門檻上下抖，站位點就在
+#                  「沿車向」和「沿視線」兩套算法之間跳。log 量到半秒內
+#                  站位點從 北+0.4 跳到 北+4.3（3.9 m）再跳回來。
+#      轉角抽動    車真的轉 83°，站位點跟著瞬移，差距從 0.42 m 跳到 2.01 m，
+#                  指令直接飽和。
+TRACK_DIR_TAU_S = 1.5          # 站位方向的低通時間常數（秒）。
+                               # 1.5 秒的依據：要壓掉 1 秒週期的翻邊（量到的
+                               # 就是每半秒換邊），又不能慢到跟不上車真正的轉彎
+                               # （環線 47 m、車 0.5 m/s，一圈 94 秒、四個轉角，
+                               # 每個轉角之間有 20 秒以上，1.5 秒遠遠跟得上）。
+TRACK_LOG_S = 0.5              # 跟隨時多久印一行診斷。
+                               # ⚠️ 2026-10-19 查這兩個問題要去解析 PX4 的
+                               #    二進位飛行記錄（.ulg）才看得出來，很花時間。
+                               #    該印出來的數字就印出來。
 
 
 def _names(msg_cls, prefix):
@@ -234,6 +337,20 @@ class DroneApi(Node):
         # cmd_timeout_s（預設 0.5 秒），否則 ensureOffboard() 會把模式搶回去
         # —— 理由和實測證據見 _settle_after_cancel。
         self.cancel_settle_s = p("cancel_settle_s", 0.8)
+        # --- 跟隨段的禁飛方框 ----------------------------------------------
+        # ⚠️ api/track 的**跟隨段**是 cmd_vel 直通 offboard → 不經過 Nav2，
+        #    所以 costmap、膨脹層、避障在那一段完全不存在。
+        #    整個跟隨迴圈原本唯一的位置保險是 PATROL_MAX_RANGE_M（50 m），
+        #    在 36×24 m 的倉庫裡等於沒有 —— 2026-10-19 因此撞上貨架摔機。
+        #
+        # 方框是 map 座標攤平的一串，每 4 個一組 (x_min, y_min, x_max, y_max)，
+        # 由 warehouse_all.launch.py 從 config/warehouse_geometry.yaml 帶入。
+        # 空的 = 沒有保險（啟動時會明確印出來）。
+        self.no_fly_margin = p("no_fly_margin_m", 0.8)
+        self.no_fly_lookahead_s = p("no_fly_lookahead_s", 1.0)
+        # 直接在這裡就換算成 PX4 本地 NED 並把餘裕膨脹進去 ——
+        # 跟隨迴圈是 10 Hz，不要每一拍重算一次不會變的東西。
+        self._no_fly = self._parse_no_fly(p("no_fly_boxes", ""))
 
         # ⚠️ 執行緒模型：服務要「等 PX4 的 ack」才回覆。
         #    單執行緒的話，服務回呼在等待時，收 ack 的訂閱回呼永遠排不到 —— 死鎖。
@@ -351,6 +468,16 @@ class DroneApi(Node):
         # 在這裡解析一次而不是每次發狀態都解析：namespace 在節點建好之後
         # 就不會變了，而 resolve_topic_name 每次都要走一遍 rcl。
         self._cmd_vel_topic = self.resolve_topic_name("cmd_vel")
+        # 跟隨階段用它驅動飛機（見 TRACK_CMD_HZ 那段）。
+        # ⚠️ 和 Nav2 共用同一個 topic 和同一個下游節點 —— 兩者絕不能同時在發，
+        #    互斥靠 _cancel_all_motion 這個唯一的節流點。
+        self.cmd_vel_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        # 請 bridge 放手用的。跟隨（cmd_vel/offboard）切回搜尋（DO_REPOSITION/AUTO）
+        # 時要先叫它交還控制權 —— 見 _release_bridge_hold。
+        # 放在可重入群組：追蹤執行緒呼叫它時，服務回呼不能和互斥群組互鎖。
+        self._release_cli = self.create_client(
+            Trigger, "cmd_vel_to_px4_node/release_hold",
+            callback_group=self._sub_group)
 
         # 任務狀態：Node-RED 的「等待完成」積木就是看這個。
         # seq 每接受一個新指令就 +1 —— 積木靠它分辨「這次」和「上一次」的完成。
@@ -381,6 +508,20 @@ class DroneApi(Node):
             + (f"map 座標，本地原點在 map({self.local_origin_map})"
                if self.local_origin_map
                else "local_origin_map 未設定 → 只能用原地轉頭掃描"))
+        # ⚠️ 這一行一定要印。跟隨段不經過 Nav2，沒有方框就是「完全沒有避障」，
+        #    而那件事從外面看不出來 —— 飛機照樣起飛、照樣追、照樣回報成功，
+        #    直到某一次站位點算錯就直接撞上去（2026-10-19 摔過一次）。
+        if self._no_fly:
+            self.get_logger().info(
+                f"api/track 跟隨段的禁飛方框：{len(self._no_fly)} 個"
+                f"（餘裕 {self.no_fly_margin:.2f} m、預判 "
+                f"{self.no_fly_lookahead_s:.1f} 秒）。"
+                "只擋靜態障礙物，不是避障系統")
+        else:
+            self.get_logger().warn(
+                "api/track 跟隨段**沒有禁飛方框** —— 那一段是 cmd_vel 直通 "
+                "offboard、不經過 Nav2，所以沒有任何避障。"
+                "倉庫場景請用 warehouse_all.launch.py 啟動（它會自動帶入）")
         self.get_logger().info(
             f"goto 用的 Nav2 action：{self.nav_action}"
             f"（逾時 {self.goto_timeout:.0f} 秒）。"
@@ -674,11 +815,47 @@ class DroneApi(Node):
         # 就是不用再逐一推理哪個 handler 需要它。
         self._settle_after_cancel(self._cancel_all_motion(f"改用 {name}"))
 
+        # 🔴 在地上還停在 OFFBOARD 的話，先切回 AUTO_LOITER 再解鎖。
+        #
+        # 症狀：追蹤（或任何走 cmd_vel 的動作）→ 降落 → 想再飛一次，
+        #       api/takeoff 回「解鎖失敗：TEMPORARILY_REJECTED」，
+        #       而且 goto/track 跟著全部拒絕（它們都要求「已經在空中」）。
+        #       儀表板上看起來就是「整組指令都失效了」。
+        #
+        # 根因：PX4 在 AUTO_LAND 落地上鎖的那一刻，會把 nav_state 退回
+        #       「上一個被明確指定的模式」—— 而追蹤期間 bridge 的
+        #       ensureOffboard() 送過 DO_SET_MODE OFFBOARD，所以退回 OFFBOARD。
+        #       2026-10-19 的 log（12:50:21.661 同一毫秒）：
+        #           [狀態] armed: True -> False
+        #           [狀態] mode: AUTO_LAND -> OFFBOARD
+        #       而「在 OFFBOARD 解鎖」要求有人正在串流 offboard setpoint，
+        #       那時候 bridge 早就銷毀 publisher 交還控制權了（12:50:10.161），
+        #       所以 PX4 拒絕解鎖 —— 而且回的是 TEMPORARILY_REJECTED，
+        #       看起來像「等一下再試就好」，其實等多久都一樣。
+        #
+        # ⚠️ 這和 bridge 沒放手無關，bridge 有正常放手。是 PX4 自己的模式殘留。
+        # ⚠️ 失敗不當致命錯誤：切不過去的話下面的解鎖本來就會失敗並報出原因，
+        #    在這裡提早 return 只會把真正的錯誤訊息藏起來。
+        if not self._armed() and self.status.nav_state == \
+                VehicleStatus.NAVIGATION_STATE_OFFBOARD:
+            self.get_logger().info(
+                "[takeoff] 飛機在地上但模式還停在 OFFBOARD（降落上鎖時 PX4 退回的）"
+                " → 先切 AUTO_LOITER，否則解鎖會被拒絕")
+            r = self._send(VehicleCommand.VEHICLE_CMD_DO_SET_MODE,
+                           p1=MODE_FLAG_CUSTOM, p2=MAIN_MODE_AUTO,
+                           p3=SUB_MODE_AUTO_LOITER)
+            if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
+                self.get_logger().warn(
+                    f"[takeoff] 切 AUTO_LOITER 沒被接受（{self._ack_text(r)}），"
+                    "還是繼續試解鎖")
+
         # NAV_TAKEOFF 只會切換模式，不會解鎖（Commander.cpp:1064），所以先解鎖。
         if not self._armed():
             r = self._send(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, p1=1.0)
             if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
-                return self._finish(response, name, False, f"解鎖失敗：{self._ack_text(r)}")
+                return self._finish(
+                    response, name, False,
+                    f"解鎖失敗：{self._ack_text(r)}（目前模式 {self._nav_name()}）")
 
         r = self._send(VehicleCommand.VEHICLE_CMD_NAV_TAKEOFF, p7=alt_amsl)
         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
@@ -898,19 +1075,32 @@ class DroneApi(Node):
 
         用「時間窗內最舊和最新的兩筆」做差分而不是相鄰兩筆 ——
         偵測是逐幀的，相鄰兩筆的時間差小、像素雜訊會被放大成很大的速度。
+
+        ---------------------------------------------------------------------
+        🔴 2026-10-19：門檻從「dt >= 0.2 秒」收緊到 0.6 秒 ＋ 至少 4 筆
+        ---------------------------------------------------------------------
+        舊門檻太鬆，直接造成一次摔機。鎖定目標的那一刻這個函式手上只有
+        兩三筆、間隔剛好 0.2~0.3 秒的資料，而且那幾筆正好落在「從 3.2 m/s
+        硬煞、機頭抬 22.7°」的姿態劇變裡（target_world_node 用最新姿態配
+        0.1~0.2 秒前的影像，姿態一動算出來的地面點就亂跳）。
+        估出來的方向是純雜訊，站位點被放到車的西邊 2.12 m —— 貨架的位置。
+        飛機滿速往西開 1.9 秒撞上去。
+
+        **回傳 (0,0) 不是「失敗」，是一個安全的答案**：呼叫端看到它會退回
+        「沿飛機→車的視線前後移動」，那條路只會朝車或離開車，不會橫移。
         """
         h = self._target_hist
-        if len(h) < 2:
+        if len(h) < TRACK_VEL_MIN_SAMPLES:
             return (0.0, 0.0)
         now = h[-1]
-        # 往回找第一筆落在時間窗外的，當作「最舊」
-        old = h[0]
-        for row in h:
-            if now[0] - row[0] <= TRACK_VEL_WINDOW_S:
-                old = row
-                break
+        # 只看時間窗內的。⚠️ 要數「窗內的筆數」而不是整個 deque 的長度 ——
+        # deque 會留著上一次看到目標時的舊資料，那些不能算進可信度。
+        recent = [r for r in h if now[0] - r[0] <= TRACK_VEL_WINDOW_S]
+        if len(recent) < TRACK_VEL_MIN_SAMPLES:
+            return (0.0, 0.0)
+        old = recent[0]
         dt = now[0] - old[0]
-        if dt < 0.2:        # 時間差太小，差分不可靠
+        if dt < TRACK_VEL_MIN_WINDOW_S:     # 時間窗太短，差分不可靠
             return (0.0, 0.0)
         return ((now[1] - old[1]) / dt, (now[2] - old[2]) / dt)
 
@@ -1080,7 +1270,8 @@ class DroneApi(Node):
             pre = f"先停在原地轉頭找目標（最多 {TRACK_ACQUIRE_S:.0f} 秒），"
         return self._finish(response, name, True,
                             f"開始追蹤：{pre}保持 {dist:.2f} m{auto_note}、"
-                            f"高度 {height:.2f} m、{dur:.0f} 秒")
+                            f"高度 {height:.2f} m（搜尋用；跟隨的高度由 bridge "
+                            f"的 flight_altitude 決定）、{dur:.0f} 秒")
 
     def _track_worker(self, dist, height, duration, search=None):
         """每秒把「目標前方 dist 公尺」的點送給 PX4。
@@ -1133,6 +1324,18 @@ class DroneApi(Node):
         s_at_acquire = None      # 鎖定那一刻「正要飛去」的航點索引
         s_sent = None            # 已經把哪個索引送給 PX4 了（避免每秒重送同一個點）
         s_adv = 0                # 總共前進過幾個航點 → 圈數 = s_adv // len(search)
+        cmd_vel_active = False   # 上一拍是不是在送 cmd_vel（切回搜尋時要先交棒）
+        last_search_tick = 0.0   # 搜尋段上次真正動作的時間（見 TRACK_SEARCH_TICK_S）
+        follow_since = None      # 這一段跟隨是什麼時候接手的（給 TRACK_HANDOFF_RAMP_S
+                                 # 的速度斜坡用）。跟丟退回搜尋時要清掉 ——
+                                 # 重新鎖定時又是一次「從高速中接手」，要重新斜坡。
+        last_log = 0.0           # 上次印診斷的時間（見 TRACK_LOG_S）
+        last_blocked = None      # 上一拍是哪個禁飛方框擋住指令（只在換的時候警告）
+        b_dir = None             # 低通後的「站位方向」單位向量（從車指向站位點）。
+                                 # None = 這一段跟隨還沒有方向 → 下一拍直接採用
+                                 # 原始值，不要從舊的濾過來。跟丟退回搜尋時要清掉：
+                                 # 重新鎖定時車可能已經在走別的方向了。
+        b_dir_t = None           # b_dir 上次更新的時間（算低通係數用）
         try:
             while True:
                 if self._track_stop.wait(TRACK_UPDATE_S):
@@ -1181,6 +1384,31 @@ class DroneApi(Node):
                     self._track_info["phase"] = "searching"
                     # 跟丟了 → 「保持了多久」歸零（重新鎖定才重新計時）
                     locked_since = None
+
+                    # --- 跟隨(offboard) → 搜尋(AUTO) 的模式交接 -----------------
+                    # ⚠️ 不交接就直接送 DO_REPOSITION 的話，bridge 的
+                    #    ensureOffboard() 會把 PX4 拉回 OFFBOARD，AUTO 和 OFFBOARD
+                    #    互搶 —— 而且不會有任何錯誤訊息（和 _settle_after_cancel
+                    #    處理 nav 的理由完全一樣）。
+                    if cmd_vel_active:
+                        cmd_vel_active = False
+                        follow_since = None
+                        # 方向濾波器也要清掉 —— 重新鎖定時車可能已經轉向了，
+                        # 從舊方向慢慢濾過去會讓飛機先往錯的地方走 1.5 秒。
+                        b_dir = b_dir_t = None
+                        self._release_bridge_hold()
+                        self.get_logger().info(
+                            "[track] 跟丟 → 停送 cmd_vel，等 bridge 交還控制權")
+                        # 停送 + 等超過 cmd_timeout_s，bridge 才會真的放手
+                        if self._track_stop.wait(TRACK_MODE_SWITCH_S):
+                            return
+                        last_search_tick = 0.0     # 交接完立刻讓搜尋動起來
+
+                    # 搜尋段維持 1 秒一拍（原地掃描是按「每拍轉 30°」設計的）
+                    now_t = time.monotonic()
+                    if now_t - last_search_tick < TRACK_SEARCH_TICK_S:
+                        continue
+                    last_search_tick = now_t
 
                     # --- 巡航搜尋（有給環線時走這條）------------------------
                     if search is not None:
@@ -1309,15 +1537,34 @@ class DroneApi(Node):
                     # 不挪的話 _check_task 會在我們還在追的時候把任務判定逾時
                     waited = time.monotonic() - wait_since
                     wait_since = None
-                    # ⚠️ 2026-10-08：剛鎖定時一定要送一道新指令，不能讓
-                    #    「站位點離飛機不夠遠」把它擋掉。
-                    #    搜尋階段 PX4 手上握著搜尋航點，飛機正以 TRACK_SPEED_MPS
-                    #    往那裡飛。不蓋掉的話飛機會直接掠過車子，3 秒後判定丟失
-                    #    回到搜尋 —— 症狀就是「第一次掃到不會鎖定，要繞第二圈」。
-                    #    而剛鎖定那一拍 _target_hist 只有一兩筆，速度估計是 (0,0)，
-                    #    站位點退回「沿飛機→目標連線」，很容易算出離飛機很近的點，
-                    #    所以這個閘門幾乎一定會擋住。
+                    # ⚠️ 2026-10-08 加這個旗標，是因為舊版的跟隨用
+                    #    TRACK_GOAL_TOL_M 當閘門：「站位點離飛機不夠遠就不送指令」，
+                    #    而剛鎖定那一拍 _target_hist 只有一兩筆、速度估計是 (0,0)，
+                    #    站位點退回「沿連線後退」會算出很近的點，閘門幾乎一定擋住 ——
+                    #    症狀是「第一次掃到不會鎖定，要繞第二圈」。
+                    #
+                    #    2026-10-16 改速度控制之後**那個閘門已經不存在**（每一拍
+                    #    都送 cmd_vel），所以這個旗標對跟隨不再有作用。留著是因為
+                    #    搜尋段還用 s_at_acquire 記「鎖定那一刻要去的航點」。
+                    #
+                    #    而「PX4 手上還握著搜尋航點」這件事也自動解決了：
+                    #    第一則 cmd_vel 會讓 bridge 把 PX4 拉進 OFFBOARD
+                    #    （ensureOffboard），AUTO 的航點就失效了。
                     just_acquired = True
+                    # 速度斜坡的起點。2026-10-19 摔機就是在這一刻接手的 ——
+                    # 當時飛機正以 3.2 m/s 飛搜尋段，第一則 cmd_vel 直接給 1.40，
+                    # PX4 抬頭 22.7° 硬煞（詳見 TRACK_HANDOFF_RAMP_S 的說明）。
+                    follow_since = time.monotonic()
+                    # ⚠️ 跟隨階段的高度**不是** Track 的 altitude 決定的。
+                    #    cmd_vel 沒有高度這個維度，定高是 cmd_vel_to_px4_node
+                    #    用它自己的 flight_altitude 參數做的（launch 時設定，
+                    #    warehouse_all 的 altitude 會傳下去）。
+                    #    Track 的 altitude 只影響**搜尋**階段的航點高度。
+                    #    兩者不同的話飛機一進入跟隨就會變高度 —— 印出來才看得見。
+                    self.get_logger().info(
+                        f"[track] 鎖定目標，改用速度控制跟隨"
+                        f"（搜尋高度 {height:.2f} m；跟隨高度由 bridge 的 "
+                        f"flight_altitude 決定，不是這個值）")
                     # 記下鎖定那一刻正要飛去的航點 —— 下次進搜尋時要靠它算出
                     # 「剛才是從哪一個航點過來的」，才能回頭走向車所在的那一側。
                     # ⚠️ 不能用「挑最近的」：飛機在 (5.6,+2) 往北、原本要去
@@ -1356,17 +1603,31 @@ class DroneApi(Node):
                 #
                 # 現在改成「沿目標的行進方向跟在它後面」：位移不會塌縮，
                 # 而且飛機會穩定待在車的正後方 —— 剛好是相機前方那個視窗。
+                # ⚠️ 2026-10-19 再改一次：方向改成「混合 + 低通」。
+                #    理由和量到的數字見 TRACK_DIR_TAU_S 的說明 ——
+                #    站位點剛性掛在估出來的車行方向上，方向一抖整個站位點
+                #    就繞著車瞬移，而那個方向本來就很抖。
+                #
+                # 下面都用 b = 「從車指向站位點」的單位向量來算，
+                #     站位點 = 車 + b × dist
+                # 兩個來源：
+                #     b_vel = −v̂            車在動 → 跟在它後面
+                #     b_los = −(車−飛機)/d   車沒在動 → 維持現在的視線方向
                 vx, vy = self._target_velocity()
                 vmag = math.hypot(vx, vy)
-                if vmag >= TRACK_MIN_TARGET_SPEED:
-                    gx = tx - vx / vmag * dist
-                    gy = ty - vy / vmag * dist
-                elif d > 1e-6:
-                    # 目標幾乎沒動 → 沒有「行進方向」可用，退回沿連線後退。
-                    # 這時候位移塌縮不是問題（目標不動，落後就不會累積）。
-                    gx = tx - dx / d * dist
-                    gy = ty - dy / d * dist
+                b_raw = self._blend_standoff_dir(vx, vy, vmag, dx, dy, d)
+                if b_raw is not None:
+                    now_f = time.monotonic()
+                    dt_f = (min(now_f - b_dir_t, 1.0)
+                            if b_dir_t is not None else TRACK_UPDATE_S)
+                    b_dir = self._filter_dir(b_dir, b_raw, dt_f)
+                    b_dir_t = now_f
+
+                if b_dir is not None:
+                    gx = tx + b_dir[0] * dist
+                    gy = ty + b_dir[1] * dist
                 else:
+                    # 既沒有車速也沒有視線（飛機正好在車的正上方）→ 待在原處
                     gx, gy = tx, ty
 
                 # 機頭要轉向目標 —— 相機是鎖死在機身上的，不轉頭的話目標會從畫面
@@ -1378,31 +1639,118 @@ class DroneApi(Node):
                 err = bearing - float(self.lpos.heading)
                 err = (err + math.pi) % (2 * math.pi) - math.pi
 
-                # 「要不要動」看的是**站位點**離飛機多遠，不是目標離飛機多遠。
-                # 用後者在新的站位點算法下會自相矛盾：目標在 1.3 m 處可能表示
-                # 已經到位（正後方），也可能表示站位點還在 2 m 外（側面）。
-                goal_d = math.hypot(gx - float(self.lpos.x), gy - float(self.lpos.y))
-                need_move = goal_d > TRACK_GOAL_TOL_M or just_acquired
-                need_turn = abs(err) > TRACK_YAW_TOL_RAD
-                just_acquired = False
-                if not need_move and not need_turn:
-                    continue        # 位置和機頭都到位了，不用再送新的指令
+                # --- 速度控制（2026-10-16 從 DO_REPOSITION 改過來）-------------
+                #
+                # 這裡**沒有「到位就不動」這件事**，和舊版最大的差別就在這。
+                # 舊版用 TRACK_GOAL_TOL_M 判斷「站位點夠近就不送新指令」，
+                # 因為每道 DO_REPOSITION 都會讓飛機衝一次；速度控制剛好相反 ——
+                # 持續送才能維持速度，停送反而會讓 bridge 逾時放手。
+                # 誤差小的時候比例控制自然會給出小速度，不需要死區。
+                #
+                # ⚠️ 看得到目標的每一拍都要送，不能 continue 跳過。
+                #    斷流超過 bridge 的 cmd_timeout_s（0.5 秒）就會交還控制權。
+                dn = gx - float(self.lpos.x)
+                de = gy - float(self.lpos.y)
+                err_d = math.hypot(dn, de)
 
-                if need_move:
-                    lat, lon = self._local_to_global(gx, gy)
-                    alt = alt_amsl
+                # 接手後的速度斜坡。上限從 0 線性拉到 TRACK_FOLLOW_SPEED ——
+                # 搜尋段的 DO_REPOSITION 會讓飛機跑到 3 m/s 以上，直接塞一個
+                # 1.4 m/s 的反向指令會讓 PX4 抬頭 20° 以上硬煞，而那個姿態劇變
+                # 本身就會讓 target_world_node 算出來的目標位置亂跳
+                # （它用最新姿態配 0.1~0.2 秒前的影像）。
+                # 2026-10-19 摔機的起點就是這個硬煞。
+                #
+                # ⚠️ 斜坡的第一拍 cap 是 0，送出去的是**零速度**指令。
+                #    模擬沒問題（config/px4_bridge.yaml 沒設 zero_cmd_deadband，
+                #    declare 的預設是 0.0 → 零指令就是「速度 0」，正好是煞車）。
+                #    實機的 drone_bringup/config/real/px4_bridge.yaml:77 設了
+                #    0.02，所以那一拍會觸發 bridge 的「水平指令是零 → 位置鎖住
+                #    原地」，下一拍又離開 —— log 上會多一對「進入/離開定點」。
+                #    只有第一拍會這樣（10 Hz、1 秒斜坡），無害，但看到不要以為壞了。
+                cap = TRACK_FOLLOW_SPEED
+                if follow_since is not None:
+                    el = time.monotonic() - follow_since
+                    if el < TRACK_HANDOFF_RAMP_S:
+                        cap *= max(0.0, el / TRACK_HANDOFF_RAMP_S)
+
+                # 比例控制 + 封頂。**在 NED 做**，算完才轉機體 ——
+                # 下一步的禁飛夾制必須在 NED（貨架面是垂直於 map 軸的平面，
+                # 機體的「左右」會隨機頭轉而指向不同的實體方向）。
+                # ⚠️ 封頂要**等比例縮放**兩軸，不能各自 clamp ——
+                #    各自 clamp 會改變合速度的方向，飛機就不是朝站位點走了。
+                # ⚠️ 縮放比例是 上限 / **誤差距離**，不是 上限 / (誤差×KP)。
+                #    寫成後者的話實際上限會變成 TRACK_FOLLOW_SPEED / TRACK_KP
+                #    （KP=1.2 時只有 1.17 m/s），飛機會跟得比設定慢而且不自知。
+                #    2026-10-16 第一版就寫錯，用純算術測出來的。
+                if err_d < 1e-6:
+                    vn = ve = 0.0
                 else:
-                    # 只要轉頭：位置和高度全留 NaN，navigator 會沿用現在的設定點
-                    # （navigator_main.cpp:336「Position is not changing, thus we keep the setpoint」）
-                    lat = lon = alt = NAN
+                    k = (cap / err_d if err_d * TRACK_KP > cap else TRACK_KP)
+                    vn, ve = dn * k, de * k
 
-                r = self._send(VehicleCommand.VEHICLE_CMD_DO_REPOSITION,
-                               p1=TRACK_SPEED_MPS, p2=REPOSITION_CHANGE_MODE,
-                               p4=bearing, p5=lat, p6=lon, p7=alt)
-                if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
-                    self._end_task(False, f"目標點被拒絕：{self._ack_text(r)}")
-                    return
+                # 禁飛方框 —— 跟隨段唯一的硬性保險（詳見 _clamp_no_fly）
+                vn, ve, blocked = self._clamp_no_fly(vn, ve)
+                fwd, left = self._ned_to_body(vn, ve)
+
+                # 機頭轉向目標。容差內就不轉，免得在目標正前方時左右微抖。
+                #
+                # 🔴 符號要反號。err 是 **NED 的航向誤差**（繞下軸、順時針為正），
+                #    而 cmd_vel 的 angular.z 是 ROS 慣例（繞上軸、**逆時針**為正）。
+                #    cmd_vel_to_px4_node.cpp:347-349 會再反號一次轉回 PX4 的
+                #    yawspeed，所以這裡不反的話等於反了兩次 ——
+                #    飛機往**相反方向**轉頭，目標直接掉出 ±34° 的視野。
+                #    2026-10-16 第一版就是這樣：追上之後必定跟丟，
+                #    變成「追上→跟丟→重新搜尋」的循環，距離<3m 的時間從 86% 掉到 52%。
+                yawrate = 0.0
+                if abs(err) > TRACK_YAW_TOL_RAD:
+                    yawrate = max(-TRACK_MAX_YAWRATE,
+                                  min(TRACK_MAX_YAWRATE, -err * TRACK_YAW_KP))
+
+                # --- 診斷（2026-10-19 加）------------------------------------
+                # ⚠️ 2026-10-19 查「撞貨架」和「畫面左右晃」兩個問題，都是去解析
+                #    PX4 的二進位飛行記錄（.ulg）才看得出來的 —— 很花時間，
+                #    而且只有事後才查得到。這幾個數字就是當時需要的：
+                #    車在哪、估出來的車向、站位點、誤差、實際送出去的速度。
+                if blocked is not None and blocked != last_blocked:
+                    # 被夾住是會摔機的那條路被攔下來了，不要只出現在節流過的行裡
+                    self.get_logger().warn(
+                        f"[track] 禁飛方框攔住了速度指令：{blocked}"
+                        f"（站位點在 北{gx:+.1f} 東{gy:+.1f}）")
+                last_blocked = blocked
+                now_l = time.monotonic()
+                if now_l - last_log >= TRACK_LOG_S:
+                    last_log = now_l
+                    if vmag >= TRACK_MIN_TARGET_SPEED:
+                        vdir = f"{math.degrees(math.atan2(vy, vx)):+.0f}° {vmag:.2f}m/s"
+                    elif vmag > 0.0:
+                        vdir = f"太慢({vmag:.2f})"
+                    else:
+                        vdir = "資料不足"
+                    # 原始方向和濾波後的方向都要印 —— 要比較才看得出低通有沒有
+                    # 在作用。站位方向 b_dir 是「車→站位點」，反過來才是車行方向，
+                    # 所以印的時候加 180° 讓兩個數字可以直接對照。
+                    if b_dir is not None:
+                        fdir = (f"{math.degrees(math.atan2(-b_dir[1], -b_dir[0])):+.0f}°")
+                    else:
+                        fdir = "無"
+                    self.get_logger().info(
+                        f"[track] 車(北{tx:+.1f} 東{ty:+.1f}) 車向 原始{vdir} 濾後{fdir}"
+                        f"　站位(北{gx:+.1f} 東{gy:+.1f}) 差 {err_d:.2f}m"
+                        f"　機頭差 {math.degrees(err):+.0f}°"
+                        f"　→ 前{fwd:+.2f} 左{left:+.2f} 轉{math.degrees(yawrate):+.0f}°/s"
+                        + (f"　🔴夾住 {blocked}" if blocked else ""))
+
+                self._send_cmd_vel(fwd, left, yawrate)
+                just_acquired = False
+                cmd_vel_active = True
         finally:
+            # ⚠️ 跟隨是靠持續送 cmd_vel 驅動的，執行緒一結束就沒有人在送了。
+            #    模擬裡 bridge 逾時會自己放手，但室內實機的 hold_on_timeout=true
+            #    會讓它一直維持原地定點、把 PX4 鎖在 OFFBOARD ——
+            #    所以明確呼叫 release_hold 交棒（見 _release_bridge_hold）。
+            #    放在 finally：不管是正常結束、被取消、還是丟例外都要交還。
+            if cmd_vel_active:
+                self._release_bridge_hold()
             # 追蹤結束的結果也要寫進 last_message，否則那一欄會凍在「開始追蹤…」，
             # 看不出來是追完了還是中途失敗。
             # 判 name == "track"：被別的指令接手時 _task 已經換成新指令了，
@@ -1447,6 +1795,228 @@ class DroneApi(Node):
         except ValueError:
             return None
         return (my - oy, mx - ox)
+
+    # -------------------------------------------------------------------------
+    #  站位方向 —— 治「左右搖擺」和「鎖定時抽動」
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _blend_standoff_dir(vx, vy, vmag, dx, dy, d):
+        """算「從車指向站位點」的單位向量，站位點 = 車 + b × dist。
+
+        兩個來源按車速權重**連續混合**：
+            b_vel = −v̂             車在動 → 跟在它後面
+            b_los = −(車−飛機)/d    車沒在動 → 維持現在的視線方向
+            w     = min(1, vmag / TRACK_MIN_TARGET_SPEED)
+            b     = normalize(w·b_vel + (1−w)·b_los)
+
+        🔴 為什麼不是「超過門檻用前者、否則用後者」的硬切換：
+           車速估計在門檻上下抖的時候，硬切換會讓站位點在兩套算法之間跳。
+           2026-10-19 的 log（鎖定後第 3~5 拍，dist = 2.12 m）：
+               車向 -149° 0.23m/s → 站位 北+4.3  差 4.42 m
+               車向 太慢(0.14)    → 站位 北+0.2  差 0.22 m
+               車向 +170° 0.39m/s → 站位 北+4.2  差 3.32 m
+           半秒內站位點跳了 3.9 m —— 那就是「剛看到目標時抽動一下」。
+           連續混合在門檻附近沒有斷點，所以不會跳。
+
+        兩個來源都算不出來（車速是 0 而且飛機正好在車的正上方）回 None。
+        """
+        if vmag <= 1e-9 and d <= 1e-6:
+            return None
+        w = min(1.0, vmag / TRACK_MIN_TARGET_SPEED) if vmag > 1e-9 else 0.0
+        bx = by = 0.0
+        if vmag > 1e-9:
+            bx -= w * vx / vmag
+            by -= w * vy / vmag
+        if d > 1e-6:
+            bx -= (1.0 - w) * dx / d
+            by -= (1.0 - w) * dy / d
+        bn = math.hypot(bx, by)
+        # 混合後長度塌成 0 = 兩個來源正好相反（車**朝著飛機**開過來，
+        # 而且速度剛好在門檻的一半）。這時候沒有合理的中間方向，
+        # 用車速那一邊 —— 它才是「車要往哪去」的資訊。
+        if bn <= 1e-9:
+            return (-vx / vmag, -vy / vmag) if vmag > 1e-9 else None
+        return (bx / bn, by / bn)
+
+    @staticmethod
+    def _filter_dir(prev, raw, dt):
+        """站位方向的一階低通。prev 是 None（這一段跟隨的第一拍）就直接用 raw。
+
+        🔴 要濾**向量**再正規化，不能濾角度。
+           角度在 ±180° 會跳：車往南走時原始方向在 +179° 和 −179° 之間跳，
+           濾角度會算出 0°（正北）—— 飛機會直接衝到車前面去。
+           向量內插沒有這個問題。
+
+        為什麼需要（2026-10-19 從 log 量到的，車是直線往北走、真實方向 0°）：
+            車向 -12° → 左-0.70      車向 +14° → 左+0.75
+        方向每半秒在 ±13° 之間翻邊，橫向速度指令一比一跟著翻。
+        τ = TRACK_DIR_TAU_S = 1.5 秒，壓得掉 1 秒週期的翻邊，
+        又遠遠跟得上車真正的轉彎（環線四個轉角之間隔 20 秒以上）。
+        """
+        if prev is None:
+            return raw
+        a = 1.0 - math.exp(-max(dt, 1e-3) / TRACK_DIR_TAU_S)
+        fx = prev[0] + (raw[0] - prev[0]) * a
+        fy = prev[1] + (raw[1] - prev[1]) * a
+        fn = math.hypot(fx, fy)
+        # 濾完長度塌成 0 = 新舊方向正好相反（車 180° 大轉彎）。
+        # 沒有「中間方向」可言，直接跳到新的 —— 濾波不該讓飛機卡在
+        # 一個哪邊都不是的方向上。
+        return (fx / fn, fy / fn) if fn > 1e-6 else raw
+
+    # -------------------------------------------------------------------------
+    #  禁飛方框 —— 跟隨段唯一的硬性保險
+    # -------------------------------------------------------------------------
+
+    def _parse_no_fly(self, text):
+        """剖析 no_fly_boxes 參數 → PX4 本地 NED 的禁飛方框清單。
+
+        回傳 [(n_min, e_min, n_max, e_max, 名稱), ...]，**餘裕已經膨脹進去**。
+        沒設定、格式不對、或沒有 local_origin_map 都回空清單
+        （＝跟隨段沒有這道保險，啟動訊息會說出來）。
+
+        輸入是 map 座標（ENU）攤平的一串，每 4 個一組：
+            x_min, y_min, x_max, y_max
+
+        ⚠️ **兩個軸會互換**。換算關係見 _map_to_local：
+                ned_north = map_y - origin_y     ned_east = map_x - origin_x
+            所以 map 的 **y** 區間變成 north 區間、map 的 **x** 區間變成 east
+            區間。寫成 (n_min, e_min) = (my0, mx0) 很容易看漏，
+            這裡刻意用 _map_to_local 轉兩個角點而不是自己減，
+            就是為了不要出現第二份座標換算程式碼。
+        """
+        nums = []
+        for tok in str(text).replace(" ", "").split(","):
+            if not tok:
+                continue
+            try:
+                nums.append(float(tok))
+            except ValueError:
+                self.get_logger().error(
+                    f"no_fly_boxes 裡有不是數字的東西：{tok!r} → 整組不用，"
+                    "跟隨段沒有禁飛保險")
+                return []
+        if not nums:
+            return []
+        if len(nums) % 4:
+            self.get_logger().error(
+                f"no_fly_boxes 有 {len(nums)} 個數字，不是 4 的倍數 → 整組不用，"
+                "跟隨段沒有禁飛保險")
+            return []
+        m = float(self.no_fly_margin)
+        out = []
+        for i in range(0, len(nums), 4):
+            mx0, my0, mx1, my1 = nums[i:i + 4]
+            mx0, mx1 = min(mx0, mx1), max(mx0, mx1)
+            my0, my1 = min(my0, my1), max(my0, my1)
+            # 兩個角點各自轉換。map→NED 只是平移（沒有旋轉），所以
+            # 「map 的最小角」轉完還是「NED 的最小角」，不用再 min/max 一次。
+            lo = self._map_to_local(mx0, my0)
+            hi = self._map_to_local(mx1, my1)
+            if lo is None or hi is None:
+                self.get_logger().error(
+                    "有給 no_fly_boxes 但 local_origin_map 是空的 → 無法換算成 "
+                    "PX4 本地座標，跟隨段沒有禁飛保險")
+                return []
+            out.append((lo[0] - m, lo[1] - m, hi[0] + m, hi[1] + m,
+                        f"map x[{mx0:+.1f},{mx1:+.1f}] y[{my0:+.1f},{my1:+.1f}]"))
+        return out
+
+    @staticmethod
+    def _box_entry_axis(p, v, box, horizon):
+        """掃掠線段 p → p + v·horizon 會不會進到 box 裡？會的話回「先碰到的那一軸」。
+
+        p、v 是 (北, 東)，box 是 (lo_n, lo_e, hi_n, hi_e, …)，回傳 0、1 或 None。
+
+        標準的 AABB slab test：每一軸算出「位於該軸區間內」的時間區間
+        [near_i, far_i]，取 near = max(near_i)、far = min(far_i)。
+        兩者還有交集就表示線段會穿進方框，而 **near 最大的那一軸**就是會先
+        碰上的那一面 —— 砍掉那一軸的速度，平行那一面的分量就留下來了。
+
+        ⚠️ 是測「整條線段有沒有穿進去」而不是「終點在不在裡面」——
+           後者在速度夠快時會直接穿過薄的方框而測不到。
+        ⚠️ p 已經在方框裡的情況**這裡不處理**（會回傳一個軸），
+           由呼叫端先判斷，否則連「往外飛」都會被砍掉。
+        """
+        near, far, axis = -math.inf, math.inf, None
+        for i in (0, 1):
+            lo, hi = box[i], box[i + 2]
+            if abs(v[i]) < 1e-9:
+                # 這一軸不動：在區間外就永遠穿不進去，在區間內就不構成限制
+                if p[i] < lo or p[i] > hi:
+                    return None
+                continue
+            a = (lo - p[i]) / v[i]
+            b = (hi - p[i]) / v[i]
+            if a > b:
+                a, b = b, a
+            if a > near:
+                near, axis = a, i
+            far = min(far, b)
+        if axis is None or near > far or near >= horizon or far <= 0.0:
+            return None
+        return axis
+
+    def _clamp_no_fly(self, vn, ve):
+        """把速度指令夾成「照這個速度再飛 no_fly_lookahead_s 秒也進不了禁飛方框」。
+
+        回傳 (vn, ve, 擋住它的方框名稱 or None)。
+
+        ---------------------------------------------------------------------
+        這是什麼、不是什麼
+        ---------------------------------------------------------------------
+        **是**：「不要把飛機開進已知的牆裡」的硬性下限。方框來自
+                warehouse_geometry.yaml（四排貨架 ＋ 四面外牆內緣）。
+        **不是**：避障系統。目標車、別的飛機、臨時生成的模型都不在方框裡。
+                真正的避障是 Nav2，而跟隨段刻意不走 Nav2
+                （DO_REPOSITION/cmd_vel 都繞過 costmap）。
+
+        為什麼需要：2026-10-19 摔機。站位點算錯方向，飛機以滿速 1.40 m/s
+        往西開了 1.9 秒撞上貨架，而整個跟隨迴圈當時唯一的位置保險是
+        PATROL_MAX_RANGE_M（50 m）—— 在 36×24 m 的倉庫裡等於沒有。
+
+        ---------------------------------------------------------------------
+        只砍法線方向，不砍整個速度
+        ---------------------------------------------------------------------
+        砍掉整個速度的話，車沿著走道走、飛機一靠近貨架就整個停住 → 直接跟丟。
+        只砍「朝著那一面」的分量，飛機還能**貼著貨架面沿走道滑行**跟著車。
+
+        ⚠️ 必須在 NED 做。貨架面是垂直於 map 軸的平面，而機體的「左右」
+           會隨機頭轉而指向不同的實體方向 —— 夾機體座標的左右是錯的。
+        """
+        if not self._no_fly or self.lpos is None:
+            return vn, ve, None
+        p = (float(self.lpos.x), float(self.lpos.y))
+        horizon = max(float(self.no_fly_lookahead_s), 1e-3)
+        v = [float(vn), float(ve)]
+        blocked = None
+        # 最多三輪：一輪最多把一個軸歸零，兩個軸都歸零之後進不了任何方框，
+        # 所以一定會收斂。多輪是因為砍掉一個軸之後可能換成另一個方框擋在前面。
+        for _ in range(3):
+            hit = None
+            for box in self._no_fly:
+                if all(box[i] <= p[i] <= box[i + 2] for i in (0, 1)):
+                    # 已經在**膨脹後**的方框裡（餘裕被吃掉了，實體障礙還有一段
+                    # 距離）。這時候不能照常夾 —— 連「往外飛」都會被砍掉，
+                    # 飛機就永遠出不來。只砍「往更裡面」的分量。
+                    for i in (0, 1):
+                        out = (box[i] - p[i]
+                               if (p[i] - box[i]) < (box[i + 2] - p[i])
+                               else box[i + 2] - p[i])
+                        if v[i] * out < 0.0:
+                            v[i] = 0.0
+                            hit = f"{box[4]}（已在框內，只准往外）"
+                    continue
+                axis = self._box_entry_axis(p, v, box, horizon)
+                if axis is not None:
+                    v[axis] = 0.0
+                    hit = box[4]
+                    break
+            if hit is None:
+                break
+            blocked = hit
+        return v[0], v[1], blocked
 
     def _local_to_global(self, x, y):
         """把本地座標（公尺，北東）換成經緯度。
@@ -1515,8 +2085,15 @@ class DroneApi(Node):
 
         兩類動作要用不同手段收尾，這是 L3 的核心：
 
-        patrol / track  走 PX4 內建模式，最後送出去的目標點還留在 PX4 裡，
+        patrol          走 PX4 內建模式，最後送出去的目標點還留在 PX4 裡，
                         要用 _pause_here()（全 NaN 的 DO_REPOSITION）清掉。
+
+        track           **兩種都是**（2026-10-16 起）：搜尋階段走 DO_REPOSITION、
+                        跟隨階段走 cmd_vel/offboard。所以兩種收尾都要做 ——
+                        _track_worker 的 finally 會呼叫 release_hold 交還 offboard，
+                        這裡再補一次 _pause_here() 清掉搜尋階段留下的航點。
+                        多做一次是安全的（_pause_here 對沒有目標點的狀態無害），
+                        漏做才危險。
 
         nav（Nav2）     走 offboard。取消 action 只讓 Nav2 停發 cmd_vel，
                         但 cmd_vel_to_px4_node 的 ensureOffboard()
@@ -1535,11 +2112,69 @@ class DroneApi(Node):
         """
         if canceled & {"patrol", "track"}:
             self._pause_here()
-        if "nav" in canceled:
+        # track 的跟隨階段和 nav 一樣走 offboard，都要等 bridge 放手之後
+        # 才能把飛機交給別的模式（見上面的說明）。
+        if canceled & {"nav", "track"}:
             # 比 bridge 的 cmd_timeout_s 預設 0.5 秒多一點餘裕。
             # 這裡用 sleep 是可以的 —— 服務在互斥群組，訂閱在可重入群組，
             # 睡著期間狀態還是在更新（和 _send 等 ack 同一個道理）。
             time.sleep(self.cancel_settle_s)
+
+    def _send_cmd_vel(self, forward=0.0, left=0.0, yawrate=0.0):
+        """發一則 cmd_vel 給 cmd_vel_to_px4_node。
+
+        ⚠️ 座標是**機體 FLU**（x 前、y 左、z 上），不是 NED ——
+        cmd_vel_to_px4_node.cpp:178 印的是「前 %f 左 %f 轉 %f」。
+        用 NED 丟進去的話飛機會往莫名其妙的方向走，而且不會報錯。
+
+        ⚠️ 高度不在這裡控制。bridge 自己用 flight_altitude 參數定高
+        （cmd_vel_to_px4_node.cpp:243-246「收到 cmd_vel，開始接管（定高 %.2f m）」），
+        所以 linear.z 填了也沒用。
+        """
+        m = Twist()
+        m.linear.x = float(forward)
+        m.linear.y = float(left)
+        m.linear.z = 0.0
+        m.angular.z = float(yawrate)
+        self.cmd_vel_pub.publish(m)
+
+    def _release_bridge_hold(self):
+        """請 cmd_vel_to_px4_node 放手，把控制權交還給 PX4 的 AUTO 模式。
+
+        ⚠️ 模擬裡不呼叫也會自己放手（hold_on_timeout 預設 false，逾時走
+        「銷毀 publisher」那條路），但**室內實機必須呼叫** ——
+        那邊 hold_on_timeout 要設 true（否則交接時 setpoint 中斷、飛機會掉），
+        而 true 的時候 bridge 會一直維持原地定點並把 PX4 鎖在 OFFBOARD，
+        接下來的 DO_REPOSITION 會被它推翻，**而且不會有任何錯誤訊息**。
+
+        呼叫之後還能重新接管：release_requested_ 是一次性的，
+        收到新的 cmd_vel 就會清掉（cmd_vel_to_px4_node.cpp:231-234）。
+
+        服務不在也不當成錯誤 —— 這個節點在沒有 bridge 的場景也要能跑。
+        """
+        if not self._release_cli.service_is_ready():
+            return False
+        try:
+            fut = self._release_cli.call_async(Trigger.Request())
+            # 不等結果：服務在可重入群組，而我們只需要「請求送出去了」。
+            # 真正保證交棒的是底下那段等待（比 cmd_timeout_s 長）。
+            del fut
+            return True
+        except Exception as e:                       # noqa: BLE001
+            self.get_logger().warn(f"[track] release_hold 送不出去：{e}")
+            return False
+
+    def _ned_to_body(self, dn, de):
+        """世界 NED 的位移 → 機體 FLU 的（前, 左）。
+
+        機體前方在 NED 是 (cos h, sin h)、右方是 (-sin h, cos h)，
+        而 cmd_vel 的 y 是**左**，所以左 = -右。
+        """
+        h = float(self.lpos.heading)
+        c, sn = math.cos(h), math.sin(h)
+        forward = dn * c + de * sn
+        right = -dn * sn + de * c
+        return forward, -right
 
     def _pause_here(self):
         """就地煞停。

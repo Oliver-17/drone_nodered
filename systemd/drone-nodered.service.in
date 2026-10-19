@@ -23,7 +23,7 @@ Type=simple
 # 為什麼要 exec：讓 ros2 launch 直接「變成」這個服務的主程式，而不是 bash 的子程序。
 # bash 通常會自己做這個最佳化，明寫出來是保險 —— 之後有人在後面多加一行指令，
 # 也不會變成 systemd 盯著 bash、真正的 launch 被丟在下面一層。
-ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch drone_nodered nodered_all.launch.py max_takeoff_altitude:=6.0 local_origin_map:="@LOCAL_ORIGIN@" camera_pitch_deg:=@CAMERA_PITCH@'
+ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch drone_nodered nodered_all.launch.py max_takeoff_altitude:=6.0 local_origin_map:="@LOCAL_ORIGIN@" camera_pitch_deg:=@CAMERA_PITCH@ no_fly_boxes:="@NO_FLY@"'
 
 # 參數的理由（2026-10-08 新增）：
 #   max_takeoff_altitude:=6.0  倉庫的巡航高度是 5.0（貨架 7 m、屋頂 8 m），

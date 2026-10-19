@@ -99,6 +99,27 @@ def _spawn():
     return m.group(1), m.group(2)
 
 
+def _no_fly():
+    """從幾何檔讀禁飛方框，回傳攤平的字串（給 drone_api_node 的參數用）。
+
+    格式和 _spawn() 同一個原則：檔案是產生的、一行一個鍵、用正規表示式讀，
+    不為了這個多拉一個 yaml 相依進 launch。
+
+    讀不到就回空字串 —— **這裡和 _spawn() 不一樣，不 raise**。
+    理由：沒有禁飛方框只是少了一道保險（節點會明確印出「沒有禁飛方框」），
+    而讀不到 spawn 會讓整張地圖平移、靜默地飛錯地方。
+    兩者的嚴重性不同，所以失敗處理也不同。
+    """
+    path = os.path.join(get_package_share_directory(PKG), "config",
+                        f"{WORLD}_geometry.yaml")
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = re.search(r"^no_fly_boxes:\s*\[([^\]]*)\]", f.read(), re.M)
+    except OSError:
+        return ""
+    return m.group(1).replace(" ", "") if m else ""
+
+
 def _default_detector():
     """讀世界檔，決定預設用哪個偵測器。
 
@@ -279,6 +300,10 @@ def generate_launch_description():
                     # 值在外層就算好了（見上面 DeclareLaunchArgument 的說明），
                     # 這裡只是轉交。**不要**在這裡重算 —— model 已經被改寫過。
                     "camera_pitch_deg": LaunchConfiguration("camera_pitch_deg"),
+                    # 跟隨段的禁飛方框（貨架 + 外牆），同樣來自 warehouse_geometry.yaml。
+                    # 跟隨是 cmd_vel 直通 offboard、不經過 Nav2，所以 costmap 的
+                    # 保護在那一段完全不存在 —— 2026-10-19 撞過一次貨架。
+                    "no_fly_boxes": _no_fly(),
                 }.items(),
                 condition=IfCondition(LaunchConfiguration("api")),
             ),

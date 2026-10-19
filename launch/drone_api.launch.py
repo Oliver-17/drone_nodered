@@ -47,6 +47,20 @@ def generate_launch_description():
                               description="相機安裝俯角（度）。算最佳跟隨距離用"),
         DeclareLaunchArgument("watchdog_debounce_s", default_value="1.0",
                               description="異常要連續成立這麼久才動作，避免瞬間雜訊誤觸發"),
+        # api/track 的**跟隨段**是 cmd_vel 直通 offboard，不經過 Nav2 ——
+        # 那一段沒有 costmap、沒有膨脹層、沒有任何避障。
+        # 2026-10-19 摔機一次：站位點算錯方向，飛機滿速往西開 1.9 秒撞上貨架。
+        # 空字串 = 沒有禁飛方框（節點會明確印出來），跟隨段就完全沒有保險。
+        # 倉庫場景由 warehouse_all.launch.py 從 warehouse_geometry.yaml 自動帶入。
+        DeclareLaunchArgument("no_fly_boxes", default_value="",
+                              description="跟隨段的禁飛方框，map 座標攤平成一串，"
+                                          "每 4 個一組 x_min,y_min,x_max,y_max"),
+        DeclareLaunchArgument("no_fly_margin_m", default_value="0.8",
+                              description="禁飛方框往外膨脹多少（飛機半徑的餘裕）。"
+                                          "0.8 沿用 Nav2 的 robot_radius 0.5 再加一點"),
+        DeclareLaunchArgument("no_fly_lookahead_s", default_value="1.0",
+                              description="預判幾秒後的位置。1.0 對 1.4 m/s 是 1.4 m 餘裕，"
+                                          "而煞停只要 0.16 m"),
         Node(
             package="drone_nodered", executable="drone_api_node.py",
             name="drone_api_node", namespace=ns,
@@ -70,6 +84,15 @@ def generate_launch_description():
                 "local_origin_map": LaunchConfiguration("local_origin_map"),
                 "camera_pitch_deg": ParameterValue(
                     LaunchConfiguration("camera_pitch_deg"), value_type=float),
+                # ⚠️ 方框故意用**字串**而不是 double 陣列：launch 參數本來就是字串，
+                #    要轉成陣列得靠 value_type=List[float] 的型別推斷，
+                #    而「空字串 → 空陣列」在那條路上會變成型別錯誤。
+                #    節點自己剖析（和 local_origin_map 同一個做法）最不容易壞。
+                "no_fly_boxes": LaunchConfiguration("no_fly_boxes"),
+                "no_fly_margin_m": ParameterValue(
+                    LaunchConfiguration("no_fly_margin_m"), value_type=float),
+                "no_fly_lookahead_s": ParameterValue(
+                    LaunchConfiguration("no_fly_lookahead_s"), value_type=float),
             }],
             output="screen", emulate_tty=True,
         ),

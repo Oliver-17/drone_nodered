@@ -144,6 +144,40 @@ TARGET_LOOP = shelf_loop(PATROL_SHELF_INDEX, LOOP_OFFSET)
 # 同向時若飛機只比車快一點，會出現「跟在後面很久都碰不到」的尷尬狀況。
 SEARCH_LOOP = list(reversed(shelf_loop(PATROL_SHELF_INDEX, SEARCH_OFFSET)))
 
+# --- 禁飛方框（2026-10-19 新增）---------------------------------------------
+# api/track 的**跟隨段**是 cmd_vel 直通 offboard，不經過 Nav2 ——
+# 所以那一段沒有 costmap、沒有膨脹層、沒有任何避障。
+# 2026-10-19 實測摔機：鎖定目標的瞬間站位點算錯方向，飛機以滿速
+# 1.4 m/s 往西開了 1.9 秒，撞上第 2 排貨架的東面（x=+3.6）然後翻覆。
+#
+# 這組方框是給 drone_api_node 的**硬性下限**：不要把飛機開進已知的牆裡。
+# ⚠️ 它不是避障系統 —— 目標車、別的飛機、臨時生成的模型都不在裡面。
+#    真正的避障還是 Nav2（api/goto 那條路）。
+NO_FLY_WALL_OUT = 2.0     # 外牆方框往場外延伸多少公尺。只要比零厚就攔得住
+                          # （攔的是「線段有沒有穿進方框」不是「終點在不在裡面」），
+                          # 給 2.0 純粹是讓它在預覽圖上看得出來。
+
+
+def no_fly_boxes():
+    """靜態障礙物的外接方框，(x_min, y_min, x_max, y_max) 的清單，map 座標。
+
+    貨架用實體外框；外牆用「內緣往場外延伸」的板子。
+
+    ⚠️ 餘裕（飛機半徑那 0.5~0.8 m）**不加在這裡**。那是控制端的選擇，
+       由 drone_api_node 的 no_fly_margin_m 參數統一膨脹 ——
+       寫進這個檔的話，同一個場景就沒辦法給模擬和實機不同的餘裕。
+    """
+    hx, hy = SHELF_DEPTH / 2.0, SHELF_LENGTH / 2.0
+    out = [(cx - hx, -hy, cx + hx, hy) for cx in SHELF_CENTERS_X]
+    w = NO_FLY_WALL_OUT
+    out += [
+        (-HALF_X - w, -HALF_Y - w, -HALF_X, HALF_Y + w),    # 西牆
+        (HALF_X, -HALF_Y - w, HALF_X + w, HALF_Y + w),      # 東牆
+        (-HALF_X - w, -HALF_Y - w, HALF_X + w, -HALF_Y),    # 南牆
+        (-HALF_X - w, HALF_Y, HALF_X + w, HALF_Y + w),      # 北牆
+    ]
+    return out
+
 
 # 矩形格式：(名稱, 中心x, 中心y, x向長度, y向長度, 高度, 種類, 說明)
 # 外牆長度多加 WALL_THICK 是為了讓四個轉角互相重疊，避免接縫漏一條縫。
@@ -676,6 +710,21 @@ def write_geometry():
             "# 反向相遇最快（%.0f m 環線，飛機 2 m/s 對車 0.5 m/s → 最久 %.0f 秒）。\n"
             "# 同向的話最久要 %.0f 秒。\n"
             "search_loop: [%s]\n"
+            "\n"
+            "# --- 禁飛方框（2026-10-19 新增）-----------------------------------\n"
+            "# 給 drone_api_node 的 no_fly_boxes 參數（api/track 的跟隨段）。\n"
+            "# 跟隨是 cmd_vel 直通 offboard，不經過 Nav2 —— 那一段沒有 costmap\n"
+            "# 也沒有任何避障。2026-10-19 摔機一次：站位點算錯方向，飛機滿速\n"
+            "# 往西開 1.9 秒撞上第 2 排貨架的東面（x=+3.6）。\n"
+            "#\n"
+            "# ⚠️ 這**不是**避障系統，只是「不要把飛機開進已知的牆裡」的下限。\n"
+            "#    目標車、別的飛機、臨時生成的模型都不在裡面。\n"
+            "# ⚠️ 攤平成一串，每 4 個數字一組 (x_min, y_min, x_max, y_max)，\n"
+            "#    因為 ROS 參數只吃一維的 double 陣列。順序是\n"
+            "#    %d 排貨架（x 中心 %s）＋ 西東南北四面外牆。\n"
+            "# ⚠️ 飛機半徑的餘裕**沒有加在這裡**，由節點的 no_fly_margin_m 膨脹\n"
+            "#    —— 模擬和實機可以給不一樣的餘裕。\n"
+            "no_fly_boxes: [%s]\n"
             % (WORLD_NAME,
                SPAWN[0], SPAWN[1],
                ", ".join(f"{v:.3f}" for v in AISLE_CENTERS_X),
@@ -689,7 +738,10 @@ def write_geometry():
                loop_length(SEARCH_LOOP),
                loop_length(SEARCH_LOOP) / (2.0 + 0.5),
                loop_length(SEARCH_LOOP) / (2.0 - 0.5),
-               _loop_yaml(SEARCH_LOOP))
+               _loop_yaml(SEARCH_LOOP),
+               len(SHELF_CENTERS_X),
+               "/".join(f"{v:+.1f}" for v in SHELF_CENTERS_X),
+               ", ".join(f"{v:.3f}" for b in no_fly_boxes() for v in b))
         )
     return path
 

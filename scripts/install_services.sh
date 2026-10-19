@@ -97,6 +97,26 @@ fi
 # 相機俯角要和 x500_cam_down 的模型一致（vision.launch.py 也是依機體選 67）
 CAMERA_PITCH="67.0"
 
+# --- 跟隨段的禁飛方框（2026-10-19 新增）------------------------------------
+# 和 LOCAL_ORIGIN 完全同一個理由：drone_api_node 刻意不知道地圖的存在，
+# 場景知識由啟動的人注入，而底座（drone-nodered.service）是獨立的服務，
+# warehouse_all.launch.py 內部那條線接不到它 —— 只能靠這裡填。
+#
+# ⚠️ 這件事漏掉的後果特別陰險：api/track 的**跟隨段**是 cmd_vel 直通
+#    offboard、不經過 Nav2，所以那一段完全沒有避障。沒有方框的話飛機
+#    照樣起飛、照樣追、照樣回報成功，直到某一次站位點算錯就直接撞上去
+#    —— 2026-10-19 就是這樣撞上第 2 排貨架、從 5 m 高翻覆墜地。
+#    節點啟動時會印黃色警告說「沒有禁飛方框」，看到就是這裡沒填對。
+NO_FLY=""
+if [ -f "$GEOM" ]; then
+    NO_FLY="$(sed -n 's/^no_fly_boxes: *\[\(.*\)\].*/\1/p' "$GEOM" | tr -d ' ')"
+fi
+if [ -z "$NO_FLY" ]; then
+    echo "⚠ 讀不到 $GEOM 的 no_fly_boxes —— 跟隨段會沒有禁飛保險。"
+    echo "  解法：python3 $PKG_SRC/scripts/gen_warehouse.py --target hatchback"
+    echo "        之後重跑這支。"
+fi
+
 install_one() {
     local name="$1"
     local src="$PKG_SRC/systemd/$name.in"
@@ -122,7 +142,8 @@ install_one() {
           -e "s|@ROS_SETUP@|$ROS_SETUP|g" \
           -e "s|@PKG_SRC@|$PKG_SRC|g" \
           -e "s|@LOCAL_ORIGIN@|$LOCAL_ORIGIN|g" \
-          -e "s|@CAMERA_PITCH@|$CAMERA_PITCH|g" "$src"
+          -e "s|@CAMERA_PITCH@|$CAMERA_PITCH|g" \
+          -e "s|@NO_FLY@|$NO_FLY|g" "$src"
     } > "$dst"
     echo "  ✓ $action $dst"
 }

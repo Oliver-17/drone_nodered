@@ -32,8 +32,30 @@
 #     2026-09-28 第一版就是這樣，位置系統性偏近 0.6 m。
 #  ⚠️ 相機不在機體原點上（往前 0.12 m、往上 0.242 m），射線的起點要跟著移，
 #     否則高度少算 0.24 m，距離會短 8%。
+#
+#  ---------------------------------------------------------------------------
+#  🔴 姿態要取「拍下這張影像的那一刻」，不是「現在」（2026-10-19 修）
+#  ---------------------------------------------------------------------------
+#  舊版用 self.att＝**最新**的姿態，配上一張 0.1~0.2 秒前拍的影像
+#  （渲染 → parameter_bridge → YOLO 推論 → target_locator → 這裡）。
+#  飛機不動的時候沒差；追蹤時飛機一直在橫滾修正，就差很多：
+#      5 公尺高、姿態差 12° → 算出來的地面點假性位移 5×tan(12°) = 1.06 m
+#  而無人機那側會去追這個「假的位移」→ 更多橫滾 → 更大的假位移。
+#  **這是一個正回饋**，2026-10-19 量到的症狀是跟隨時左右搖擺：
+#  估出來的車行方向每半秒在 ±13° 之間翻邊（車其實是直線走的），
+#  橫向速度指令一比一跟著翻，峰值 0.7 m/s。
+#
+#  修法：存一小段姿態的環形緩衝，按影像的 header.stamp 內插取當時的姿態。
+#
+#  ⚠️ 兩個時戳必須同一個時鐘才比得起來：
+#       影像的 header.stamp 來自 ros_gz_bridge，是 **Gazebo 的模擬時間**
+#       PX4 的 VehicleAttitude.timestamp 是 hrt，在 SITL 由模擬器驅動
+#     兩者同源，所以 SITL 可以直接比。但這**沒有保證**（實機的 hrt 是飛控
+#     開機時間、影像來自真相機的驅動，兩者完全不同源），所以下面會先檢查
+#     差值合不合理，不合理就退回「用最新姿態」並印出實際差值。
 # =============================================================================
 
+import collections
 import math
 
 import rclpy
@@ -64,21 +86,31 @@ class TargetWorld(Node):
         # 太接近水平的射線會和地面交在很遠的地方，誤差被放大到沒有意義
         self.min_down = p("min_down_component", 0.15)
 
+        # 影像和姿態的時戳最多差這麼多還算合理（秒）。超過就當兩個時鐘不同源，
+        # 退回「用最新姿態」—— 那是舊行為，會有正回饋但至少不會算出亂數。
+        # 0.5 秒的依據：這條鏈路（渲染→bridge→YOLO→locator）實測 0.1~0.2 秒，
+        # 給到 0.5 是寬鬆的上限；時鐘不同源的話差值會是幾千萬倍，一眼就分得出來。
+        self.att_lag_max_us = int(p("attitude_lag_max_s", 0.5) * 1e6)
         self.lpos = None
         self.att = None
+        # 姿態環形緩衝。VehicleAttitude 約 250 Hz，250 筆 ≈ 1 秒 ——
+        # 比整條視覺鏈路的延遲（0.1~0.2 秒）長一個數量級，夠內插。
+        self.att_buf = collections.deque(maxlen=250)
         qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT,
                          history=HistoryPolicy.KEEP_LAST, durability=DurabilityPolicy.VOLATILE)
         self.create_subscription(VehicleLocalPosition,
                                  f"/{ns}/fmu/out/vehicle_local_position_v1",
                                  lambda m: setattr(self, "lpos", m), qos)
         self.create_subscription(VehicleAttitude, f"/{ns}/fmu/out/vehicle_attitude",
-                                 lambda m: setattr(self, "att", m), qos)
+                                 self._on_attitude, qos)
         self.create_subscription(Vector3Stamped, "/target_ray", self._on_ray,
                                  qos_profile_sensor_data)
         self.pub = self.create_publisher(PointStamped, f"/{ns}/api/target", 10)
 
         self._ok = 0
         self._bad = {}
+        self._lags = []          # 量到的影像延遲（微秒），給 _report 統計
+        self._clock_warned = False
         self.create_timer(5.0, self._report)
         self.get_logger().info(
             f"目標世界座標啟動：相機俯角 {math.degrees(self.pitch):.0f}°、"
@@ -101,17 +133,85 @@ class TargetWorld(Node):
                 vy + w * ty + (z * tx - x * tz),
                 vz + w * tz + (x * ty - y * tx))
 
+    def _on_attitude(self, m):
+        self.att = m
+        # ⚠️ 存 tuple(m.q) 而不是 m 本身。px4_msgs 的陣列欄位是 numpy view，
+        #    留著整個訊息會把 250 筆訊息都釘在記憶體裡；而且我們只要四個數字。
+        self.att_buf.append((int(m.timestamp), tuple(float(v) for v in m.q)))
+
+    @staticmethod
+    def _nlerp(qa, qb, t):
+        """兩個四元數之間的線性內插（normalized lerp）。
+
+        不用 slerp：這裡兩筆姿態相隔 4 毫秒（250 Hz），夾角最多零點幾度，
+        nlerp 和 slerp 的差距遠小於姿態估計本身的雜訊，而 nlerp 短得多。
+
+        ⚠️ 要先確認兩者在同一個半球。四元數 q 和 −q 代表同一個旋轉，
+           符號相反時直接內插會「繞遠路」轉過大半圈，中間那一刻完全是錯的。
+        """
+        d = sum(a * b for a, b in zip(qa, qb))
+        if d < 0.0:
+            qb = tuple(-v for v in qb)
+        q = tuple(a + (b - a) * t for a, b in zip(qa, qb))
+        n = math.sqrt(sum(v * v for v in q))
+        if n < 1e-9:
+            return qa
+        return tuple(v / n for v in q)
+
+    def _attitude_at(self, stamp):
+        """取「拍下這張影像的那一刻」的姿態。
+
+        回傳 (q, 延遲微秒)。延遲取不到（時鐘不同源）就回 (最新的 q, None)
+        —— 那是 2026-10-19 之前的行為，有正回饋，但不會算出亂數。
+        """
+        buf = self.att_buf
+        if not buf:
+            return None, None
+        t_img = int(stamp.sec) * 1000000 + int(stamp.nanosec) // 1000
+        lag = buf[-1][0] - t_img
+        if not -self.att_lag_max_us <= lag <= self.att_lag_max_us:
+            # 兩個時戳不同源（或影像時戳是 0）。只警告一次 —— 這是結構性的
+            # 狀況，每一幀印一次會把 log 洗掉。
+            if not self._clock_warned:
+                self._clock_warned = True
+                self.get_logger().warn(
+                    f"影像時戳和 PX4 姿態時戳差 {lag / 1e6:+.3f} 秒，"
+                    f"超出合理範圍 ±{self.att_lag_max_us / 1e6:.2f} 秒 → "
+                    "改用最新姿態（＝舊行為）。"
+                    "兩者不同源時這樣是對的，但追蹤時會有「晃→假訊號→更晃」"
+                    "的正回饋，畫面會左右搖擺")
+            return buf[-1][1], None
+        # 找夾住 t_img 的兩筆。緩衝是時間遞增的，從新往舊找最快
+        # （影像延遲只有 0.1~0.2 秒，目標就在尾端附近）。
+        prev = None
+        for ts, q in reversed(buf):
+            if ts <= t_img:
+                if prev is None:            # t_img 比最新的還新 → 用最新的
+                    return buf[-1][1], lag
+                pts, pq = prev
+                span = pts - ts
+                r = (t_img - ts) / span if span > 0 else 0.0
+                return self._nlerp(q, pq, r), lag
+            prev = (ts, q)
+        # t_img 比緩衝裡最舊的還舊（視覺鏈路塞車超過 1 秒）→ 用最舊的那一筆
+        self._skip("影像比姿態緩衝還舊")
+        return buf[0][1], lag
+
     def _skip(self, why):
         self._bad[why] = self._bad.get(why, 0) + 1
 
     def _on_ray(self, msg):
-        lp, att = self.lpos, self.att
+        lp = self.lpos
         if lp is None or not lp.xy_valid or not lp.z_valid:
             self._skip("位置估計無效")
             return
-        if att is None:
+        # 🔴 用「拍這張影像那一刻」的姿態，不是最新的（理由見檔頭）
+        q, lag = self._attitude_at(msg.header.stamp)
+        if q is None:
             self._skip("還沒收到姿態")
             return
+        if lag is not None:
+            self._lags.append(lag)
 
         # --- 1) 光學系 → 相機機體系 ---------------------------------------------
         # 光學：x 右、y 下、z 前  ／  機體：x 前、y 左、z 上
@@ -128,10 +228,10 @@ class TargetWorld(Node):
 
         # --- 3) 機體 FRD → 世界 NED（用完整姿態，不是只有機頭角）--------------------
         # PX4 的 q 是 (w, x, y, z)，代表「機體 FRD → NED」的旋轉
-        nx, ny, nz = self._rotate(att.q, (fx, fy, fz))
+        nx, ny, nz = self._rotate(q, (fx, fy, fz))
 
         # 射線的起點是「相機」不是「機體原點」，安裝位移也要轉到 NED
-        mx, my, mz = self._rotate(att.q, self.mount)
+        mx, my, mz = self._rotate(q, self.mount)
         ox, oy, oz = lp.x + mx, lp.y + my, lp.z + mz
 
         # --- 4) 和「目標高度的水平面」交會 ------------------------------------------
@@ -158,9 +258,19 @@ class TargetWorld(Node):
     def _report(self):
         if self._ok or self._bad:
             bad = "、".join(f"{k}×{v}" for k, v in self._bad.items()) or "無"
-            self.get_logger().info(f"最近 5 秒：算出目標位置 {self._ok} 次，略過：{bad}")
+            # 影像延遲要印出來：它決定「用最新姿態」會差多少 ——
+            # 5 m 高、延遲 0.15 秒、橫滾速率 30°/s → 假性位移 5×tan(4.5°) = 0.39 m。
+            # 這個數字是「為什麼要做姿態時間對齊」的直接證據，也是它有沒有生效的證據。
+            lag = ""
+            if self._lags:
+                ms = sorted(v / 1000.0 for v in self._lags)
+                lag = (f"　影像延遲 中位 {ms[len(ms) // 2]:.0f} ms"
+                       f" / 最久 {ms[-1]:.0f} ms（已按時戳取當時的姿態）")
+            self.get_logger().info(
+                f"最近 5 秒：算出目標位置 {self._ok} 次，略過：{bad}{lag}")
         self._ok = 0
         self._bad = {}
+        self._lags = []
 
 
 def main():
