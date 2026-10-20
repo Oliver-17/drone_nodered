@@ -310,7 +310,10 @@ class DroneApi(Node):
         self.altitude_margin = p("altitude_margin_m", 1.0)      # 超過上限這麼多就算失控爬升
         # 超過這麼久沒收到 PX4 的狀態，就當作沒連上，拒絕所有指令。
         self.stale_after = p("stale_after_s", 2.0)
-        status_rate = p("status_rate_hz", 2.0)
+        # ⚠️ 2026-10-20：2.0 → 5.0。儀表板加了即時地圖之後 2 Hz 太慢 ——
+        #    飛機 1.2 m/s 時每次更新位置跳 0.6 m，看起來一格一格的。
+        #    這包 JSON 很小、走本機 websocket，5 Hz 的成本可以忽略。
+        status_rate = p("status_rate_hz", 5.0)
         # goto 的預設逾時。這是節點自己的保險，不是 Nav2 的 ——
         # Nav2 的行為樹卡住時可能很久都不回 result（復原行為會一直重試）。
         # 120 秒的依據：倉庫對角約 40 m，max_vel 0.8 m/s，繞貨架算 1.6 倍 → 約 80 秒。
@@ -350,6 +353,9 @@ class DroneApi(Node):
         self.no_fly_lookahead_s = p("no_fly_lookahead_s", 1.0)
         # 直接在這裡就換算成 PX4 本地 NED 並把餘裕膨脹進去 ——
         # 跟隨迴圈是 10 Hz，不要每一拍重算一次不會變的東西。
+        # ⚠️ _parse_no_fly 會順便填 self._scene_boxes（map 座標的原始方框，
+        #    給儀表板的地圖畫）。先給一個空的，剖析失敗時才不會是未定義。
+        self._scene_boxes = []
         self._no_fly = self._parse_no_fly(p("no_fly_boxes", ""))
 
         # ⚠️ 執行緒模型：服務要「等 PX4 的 ack」才回覆。
@@ -593,6 +599,15 @@ class DroneApi(Node):
                 "altitude_m": None if self._altitude() is None else round(self._altitude(), 2),
                 "xy_valid": None if self.lpos is None else bool(self.lpos.xy_valid),
             })
+            # 儀表板的地圖和速度表（2026-10-20）。
+            # 位置給 **map 座標**而不是 PX4 的本地 NED —— 前端就不用知道
+            # 「原點在哪、哪個軸是北」，而那正是這個專案最常踩的雷。
+            sp = self._ground_speed()
+            d["speed_mps"] = None if sp is None else round(sp, 2)
+            pose = self._local_to_map()
+            if pose is not None:
+                d["map_x"], d["map_y"] = round(pose[0], 2), round(pose[1], 2)
+                d["map_heading_deg"] = round(pose[2], 1)
             # 狀態改變時印 log —— 事後看 log 才知道「按下按鈕之後飛機經歷了什麼」
             for key in ("armed", "landed", "mode"):
                 if self._prev.get(key) != d[key]:
@@ -608,6 +623,12 @@ class DroneApi(Node):
         d["ready"] = self._ready()
         d["task"] = dict(self._task)
         d["watchdog"] = dict(self._wd)
+        # 場地幾何（map 座標的方框，含貨架和外牆）。前端用它畫底圖、
+        # 並從所有方框的聯集算出畫布範圍。
+        # ⚠️ 每一拍都送（約 300 bytes）而不是只送一次：rosbridge 的訂閱者
+        #    隨時可能重連（重新整理瀏覽器就會），只送一次的話重連後地圖是空的，
+        #    而且不會有任何錯誤訊息。走本機 websocket，這個量可以忽略。
+        d["scene"] = {"boxes": self._scene_boxes}
         d.update({"last_command": self._last_cmd, "last_ok": self._last_ok,
                   "last_message": self._last_msg})
         self.status_pub.publish(String(data=json.dumps(d, ensure_ascii=False)))
@@ -1796,6 +1817,45 @@ class DroneApi(Node):
             return None
         return (my - oy, mx - ox)
 
+    def _local_to_map(self):
+        """飛機現在的位置換成 map 座標，回傳 (x, y, 機頭角度)。
+
+        是 _map_to_local 的反函數：
+            map_x = origin_x + ned_east(y)
+            map_y = origin_y + ned_north(x)
+
+        機頭角度換成「map 的 x 軸（東）起算、逆時針為正」的度數 ——
+        前端畫箭頭用的是螢幕座標，這樣換算最直接。
+        PX4 的 heading 是 NED 的航向（北起算、順時針為正），
+        兩者差一個 90° 和一個反號。
+
+        算不出來（沒有 local_origin_map、位置無效）就回 None ——
+        儀表板會顯示「位置未知」而不是畫在錯的地方。
+        """
+        if self.lpos is None or not self.lpos.xy_valid:
+            return None
+        parts = [v for v in self.local_origin_map.replace(" ", "").split(",") if v]
+        if len(parts) < 2:
+            return None
+        try:
+            ox, oy = float(parts[0]), float(parts[1])
+        except ValueError:
+            return None
+        deg = 90.0 - math.degrees(float(self.lpos.heading))
+        return (ox + float(self.lpos.y), oy + float(self.lpos.x),
+                (deg + 180.0) % 360.0 - 180.0)
+
+    def _ground_speed(self):
+        """水平地速（m/s）。垂直速度對倉庫巡檢沒意義，所以不算進去。
+
+        ⚠️ 上限要知道才看得懂儀表：Nav2 導航 1.2、跟隨 1.4（橋夾到 1.5），
+           但**搜尋段的 DO_REPOSITION 實測到 3.6~4.4 m/s**
+           （2026-10-19 的飛行記錄），所以儀表的刻度要做到 5。
+        """
+        if self.lpos is None or not self.lpos.xy_valid:
+            return None
+        return math.hypot(float(self.lpos.vx), float(self.lpos.vy))
+
     # -------------------------------------------------------------------------
     #  站位方向 —— 治「左右搖擺」和「鎖定時抽動」
     # -------------------------------------------------------------------------
@@ -1906,10 +1966,16 @@ class DroneApi(Node):
             return []
         m = float(self.no_fly_margin)
         out = []
+        # ⚠️ map 座標的原始方框要另外留一份給儀表板的地圖畫。
+        #    不能拿下面算好的 NED 版本去畫 —— 那個已經膨脹過餘裕、而且軸是反的。
+        #    這樣場地幾何只有一個來源（warehouse_geometry.yaml），
+        #    改場景重跑 gen_warehouse.py 之後地圖會自動跟著對。
+        self._scene_boxes = []
         for i in range(0, len(nums), 4):
             mx0, my0, mx1, my1 = nums[i:i + 4]
             mx0, mx1 = min(mx0, mx1), max(mx0, mx1)
             my0, my1 = min(my0, my1), max(my0, my1)
+            self._scene_boxes.append([mx0, my0, mx1, my1])
             # 兩個角點各自轉換。map→NED 只是平移（沒有旋轉），所以
             # 「map 的最小角」轉完還是「NED 的最小角」，不用再 min/max 一次。
             lo = self._map_to_local(mx0, my0)
