@@ -205,6 +205,64 @@ TRACK_VEL_WINDOW_S = 1.0
 TRACK_UPDATE_S = 1.0 / TRACK_CMD_HZ   # 迴圈節拍（0.1 秒）
 TRACK_SEARCH_TICK_S = 1.0             # 搜尋段多久才真正動一次
 
+# --- 搜尋段的「指令真的生效了嗎」保險（2026-10-20 加）------------------------
+#
+# 🔴 起因：Oliver 回報「它沒有去巡航找車」。從飛行記錄
+#    （instance_0/log/2026-10-20/10_49_04.ulg）還原出來的 30 毫秒競態：
+#        58.15 s  我們送 DO_REPOSITION（第一個搜尋航點）→ ACK **ACCEPTED**
+#        58.17 s  PX4 → AUTO_LOITER，navigator 接手
+#        58.18 s  cmd_vel_to_px4_node 送 DO_SET_MODE 把模式搶回 OFFBOARD
+#        58.20 s  PX4 → OFFBOARD。搜尋航點被作廢，飛機定在原地
+#        68.26 s  bridge 終於放手 → AUTO_LOITER。**整整白站 10.1 秒**
+#    那一趟「搜尋了 25 秒」裡有 10 秒是站著不動，是車自己開進視野才追到的。
+#
+# 為什麼既有的 _settle_after_cancel 沒擋住：它只在「取消到 nav」時才等
+# bridge 放手，而那次的 goto 是**正常完成**的 —— _nav_handle 已經是 None，
+# canceled 是空集合，於是完全不交接。但 Nav2 剛停發 cmd_vel 不等於 bridge
+# 已經放手（bridge 要等自己的 cmd_timeout_s），控制權還在它手上。
+#
+# 🔴 這個病最難查的地方：DO_REPOSITION 回的是 ACCEPTED。Commander 收到它
+#    只做一件事 —— 切 AUTO_LOITER（Commander.cpp:756-778），切成功就回
+#    ACCEPTED。「切完之後有沒有人把模式搶走」不在它的 ACK 範圍裡。
+#    所以**光看 ACK 永遠查不出來**，一定要回頭確認 nav_state。
+# 送完航點等多久確認 PX4 真的離開 OFFBOARD。實測正常情況 20 毫秒內就切好了
+# （而且是用輪詢，不會每個航點都白等 1 秒），1 秒是很寬的上限。
+TRACK_SEARCH_CONFIRM_S = 1.0
+# 被搶走時最多重送幾次。
+#
+# 為什麼是 3 而不是「撐到 bridge 放手」：那次 bridge 握了 10.1 秒，3 次重試
+# （最壞 5.4 秒）**撐不過去** —— 但那是刻意的。真正的解法是第一道防線
+# （force_handover 主動請它放手，實測第一個航點 0.1 秒內就切到 AUTO_LOITER），
+# 而如果連主動交接都沒用，表示有東西**持續**在送 cmd_vel ——
+# 那種情況重試幾次都一樣，應該趕快報錯讓人知道，不要默默撐 10 秒。
+# 所以失敗訊息要講得出根因，而不是只說「逾時」。
+TRACK_SEARCH_TRIES = 3
+# 搜尋段的診斷節拍。跟隨段每 0.5 秒印一行（TRACK_LOG_S），搜尋段原本只在
+# 「換航點」時才印 —— 所以上面那 10 秒的靜止在 log 裡完全沒有痕跡。
+# 這就是這個 bug 活到現在的原因，不是它難修，是它不會留下證據。
+TRACK_SEARCH_LOG_S = 2.0
+# 卡住偵測：這麼久之內到航點的距離沒縮短這麼多，就警告（連模式一起印）。
+# 2.0 m/s 的搜尋速度下，5 秒本來該前進 10 m，0.5 m 是非常寬鬆的門檻 ——
+# 寧可漏報也不要在正常轉彎、加速時誤報。
+TRACK_SEARCH_STUCK_S = 5.0
+TRACK_SEARCH_STUCK_M = 0.5
+
+# --- 追蹤結束要先煞停（2026-10-20 加）--------------------------------------
+#
+# 🔴 release_hold 只讓 bridge 停送 setpoint —— 它**不會讓飛機停下來**。
+#    PX4 在 OFFBOARD 失去 setpoint 時會保持最後那一則速度指令繼續飛。
+#    實測（飛行記錄 11_33_46.ulg，追蹤 90 秒正常結束）：
+#        t=164.6  最後一則 setpoint：速度 北 -0.49
+#        t=166    setpoint 停了
+#        t=166~172（log 結束）實際速度一直是 北 -0.51，完全沒有衰減
+#    儀表板上看到的是「任務顯示 idle，但飛機還以 0.5 m/s 跟著車往南走」。
+#    放著不管會一路飄到貨架或牆上。
+#
+# 所以交棒前要先送幾則零速度把它煞停，再 release，再把飛機交給 AUTO 定住。
+# 5 則 = 0.5 秒，剛好等於 bridge 的 cmd_timeout_s；
+# 從 0.5 m/s 煞停只需要約 0.17 秒（MPC_ACC_HOR 預設 3 m/s²），很充裕。
+TRACK_STOP_TICKS = 5
+
 # --- 鎖定交接的保險（2026-10-19 加，起因是撞貨架摔機）------------------------
 #
 # 🔴 那次摔機的完整過程（從 PX4 的飛行記錄 02_46_33.ulg 還原）：
@@ -446,6 +504,10 @@ class DroneApi(Node):
         # 目標位置的歷史，用來估它的速度。maxlen 20 在偵測約 10~30 Hz 下
         # 涵蓋 0.7~2 秒，夠蓋住 TRACK_VEL_WINDOW_S。
         self._target_hist = collections.deque(maxlen=20)
+        # 這一趟追蹤的搜尋環線（map 座標，給儀表板畫）。
+        # ⚠️ 每次 api/track 都要重設 —— 沒給環線（原地掃描）時必須清成空的，
+        #    不然儀表板會畫上一趟的環線，看起來像在巡航一條根本沒在走的路線。
+        self._track_search_map = []
         # want/locked_s/reacquire 是 2026-10-12 加的，給畫面分辨「在找」和
         # 「追到了而且穩住了」：
         #   want      要保持的距離（distance=0 時是自動算出來的，看不到它
@@ -549,6 +611,10 @@ class DroneApi(Node):
         return self.status.arming_state == VehicleStatus.ARMING_STATE_ARMED
 
     def _nav_name(self):
+        # 容錯：診斷訊息會在背景執行緒裡呼叫它，那裡沒有 _connected() 把關，
+        # 而「狀態還沒收到」不該讓一行 log 把追蹤執行緒打死。
+        if self.status is None:
+            return "?"
         return NAV_STATE_NAME.get(self.status.nav_state, str(self.status.nav_state))
 
     def _altitude(self):
@@ -629,6 +695,23 @@ class DroneApi(Node):
         #    隨時可能重連（重新整理瀏覽器就會），只送一次的話重連後地圖是空的，
         #    而且不會有任何錯誤訊息。走本機 websocket，這個量可以忽略。
         d["scene"] = {"boxes": self._scene_boxes}
+        # 視覺目標現在在哪（2026-10-20）。⚠️ 這是 **YOLO 算出來的位置**，
+        # 不是 Gazebo 的真值 —— 所以儀表板上的紅點和無人機的相對位置，
+        # 直接就是追蹤誤差；跟丟的時候紅點會凍住。實機也有這個資訊。
+        # target_age_s 讓前端分得出「現在看得到」和「這是最後一次看到的位置」。
+        # 先抓到區域變數再用：_on_target 在另一個執行緒裡寫它。
+        tgt, t_tgt = self.target, self._t_target
+        if tgt is not None:
+            tm = self._ned_to_map(tgt[0], tgt[1])
+            if tm is not None:
+                d["target_map_x"], d["target_map_y"] = round(tm[0], 2), round(tm[1], 2)
+                d["target_age_s"] = round(time.monotonic() - t_tgt, 1)
+        # 「多久沒看到就算跟丟」也一起送，前端才不用寫死一個會跟節點不一致的值
+        d["target_lost_s"] = TRACK_LOST_S
+        # 搜尋環線（map 座標）。畫在地圖上才看得出「它到底有沒有在巡航」——
+        # 2026-10-20 那次「沒去巡航找車」從儀表板上完全看不出來。
+        if self._track_search_map:
+            d["track"]["search_map"] = self._track_search_map
         d.update({"last_command": self._last_cmd, "last_ok": self._last_ok,
                   "last_message": self._last_msg})
         self.status_pub.publish(String(data=json.dumps(d, ensure_ascii=False)))
@@ -834,7 +917,11 @@ class DroneApi(Node):
         # 所以理論上這裡沒有東西要取消。接上節流點是防禦性的 ——
         # 「看門狗降落了但背景執行緒還活著」這類狀況出現過，而節流點的意義
         # 就是不用再逐一推理哪個 handler 需要它。
-        self._settle_after_cancel(self._cancel_all_motion(f"改用 {name}"))
+        #
+        # force_handover=False：飛機在地上，bridge 不可能握著控制權
+        # （要飛起來才會有 cmd_vel），等 0.8 秒只是讓起飛鈕變慢。
+        self._settle_after_cancel(self._cancel_all_motion(f"改用 {name}"),
+                                  force_handover=False)
 
         # 🔴 在地上還停在 OFFBOARD 的話，先切回 AUTO_LOITER 再解鎖。
         #
@@ -990,7 +1077,12 @@ class DroneApi(Node):
 
         # 既有的動作要先停掉，否則多個控制路徑同時在動。
         # keep 不填 —— 連舊的 nav 也要取消（送新目標會取代舊的，但狀態要收乾淨）。
-        self._settle_after_cancel(self._cancel_all_motion(f"改用 {name}"))
+        #
+        # force_handover=False：goto **就是要**走 OFFBOARD（Nav2 → cmd_vel →
+        # bridge），請 bridge 放手是反效果。這是整個節點裡唯一不交接的飛行動作，
+        # 其他都走 AUTO 模式（見 _settle_after_cancel 的說明）。
+        self._settle_after_cancel(self._cancel_all_motion(f"改用 {name}"),
+                                  force_handover=False)
 
         yaw = float(request.yaw)
         # 「不在乎朝向」的兩種寫法都接受。|yaw| > pi 這條是給 Node-RED 用的 ——
@@ -1253,11 +1345,21 @@ class DroneApi(Node):
         # 同一時間只能有一個東西在下目標點
         # 2026-10-07：原本只取消 patrol 和 track，漏了 nav ——
         # 導航中開始追蹤會變成 Nav2 和 DO_REPOSITION 同時在動。
+        # ⚠️ 這裡的交接（_settle_after_cancel 的 force_handover，預設 True）
+        #    是必要的：搜尋段走 AUTO 模式的 DO_REPOSITION，而控制權可能還在
+        #    bridge 手上 —— 最典型的就是「剛跑完 goto」，Nav2 的目標是**正常
+        #    完成**的，所以上面的 _cancel_all_motion 什麼都沒取消到，但 bridge
+        #    還要好幾秒才放手。不先交接的話第一個搜尋航點會被它推翻，而且
+        #    ACK 是 ACCEPTED，完全看不出異常（2026-10-20 白站 10.1 秒）。
         self._settle_after_cancel(self._cancel_all_motion("改成追蹤目標"))
         self._end_task(False, "被追蹤指令取代")
 
         height = alt if alt != 0.0 else (self._altitude() or 0.0)
         looking = age is None or age > TRACK_LOST_S
+        # 給儀表板畫搜尋環線。沒給環線時一律清空（見 _track_search_map 的說明）。
+        self._track_search_map = ([[round(x, 2), round(y, 2)]
+                                   for x, y in zip(mxs, mys)]
+                                  if search is not None else [])
         self._track_stop.clear()
         self._track_info = {"active": True, "distance": None,
                             "lost_s": round(age, 1) if age is not None else None,
@@ -1351,6 +1453,10 @@ class DroneApi(Node):
                                  # 的速度斜坡用）。跟丟退回搜尋時要清掉 ——
                                  # 重新鎖定時又是一次「從高速中接手」，要重新斜坡。
         last_log = 0.0           # 上次印診斷的時間（見 TRACK_LOG_S）
+        last_search_log = 0.0    # 搜尋段上次印診斷的時間（見 TRACK_SEARCH_LOG_S）
+        stuck_ref = None         # 卡住偵測的參考點 (時間, 到航點的距離)。
+                                 # None = 重新起算（換航點、或剛警告過）
+        scan_warned = False      # 原地掃描的「控制權被搶」警告印過了嗎
         last_blocked = None      # 上一拍是哪個禁飛方框擋住指令（只在換的時候警告）
         b_dir = None             # 低通後的「站位方向」單位向量（從車指向站位點）。
                                  # None = 這一段跟隨還沒有方向 → 下一拍直接採用
@@ -1500,23 +1606,54 @@ class DroneApi(Node):
                         if s_sent != s_i:
                             # 只在換航點時送 —— 和 _patrol_worker 一樣。
                             # 每秒重送同一個點會讓 navigator 不斷重設設定點。
-                            lat, lon = self._local_to_global(px, py)
-                            # 機頭朝行進方向：相機只看得到前方 0~3.6 m，
-                            # 機頭不轉等於閉著眼睛飛（和 _patrol_worker 同一個理由）
-                            yaw = math.atan2(py - float(self.lpos.y),
-                                             px - float(self.lpos.x))
-                            r = self._send(VehicleCommand.VEHICLE_CMD_DO_REPOSITION,
-                                           p1=-1.0, p2=REPOSITION_CHANGE_MODE,
-                                           p4=yaw, p5=lat, p6=lon, p7=alt_amsl)
-                            if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
-                                self._end_task(
-                                    False, f"搜尋航點被拒絕：{self._ack_text(r)}")
+                            #
+                            # ⚠️ 送出去**並確認 PX4 真的接手**（2026-10-20）。
+                            #    光看 ACK 不夠 —— 見 _send_search_waypoint。
+                            sent = self._send_search_waypoint(px, py, alt_amsl)
+                            if sent is None:        # 追蹤被取消
+                                return
+                            if sent is not True:    # 失敗的原因字串
+                                self._end_task(False, sent)
                                 return
                             s_sent = s_i
                             self.get_logger().info(
                                 f"[track] 搜尋航點 {s_i}："
                                 f"北{px:+.1f} 東{py:+.1f}（第 "
                                 f"{s_adv // len(search) + 1}/{TRACK_SEARCH_LAPS} 圈）")
+                            stuck_ref = None        # 換航點 → 卡住偵測重新起算
+
+                        # --- 搜尋段的診斷（2026-10-20 加）--------------------
+                        # 原本只在「換航點」時印，所以「指令被搶走、飛機站在
+                        # 原地」這種狀況在 log 裡完全沒有痕跡 —— 那正是
+                        # 10.1 秒靜止的 bug 能活這麼久的原因。
+                        # 跟隨段早就有逐拍診斷了，搜尋段卻是啞的。
+                        d_now = self._distance_to(px, py)
+                        if now_t - last_search_log >= TRACK_SEARCH_LOG_S:
+                            last_search_log = now_t
+                            sp = self._ground_speed()
+                            self.get_logger().info(
+                                f"[track] 搜尋 第{s_i}點(北{px:+.1f} 東{py:+.1f}) "
+                                f"剩 {d_now:.1f}m（第 "
+                                f"{s_adv // len(search) + 1}/{TRACK_SEARCH_LAPS} 圈）"
+                                f"　模式 {self._nav_name()} "
+                                f"地速 {0.0 if sp is None else sp:.1f}m/s"
+                                # max(0)：now_t 是在上面的 tick 節流處取的，
+                                # 比 wait_since 早一點點，第一拍會印成「-0 秒」
+                                f"　找了 {max(0.0, now_t - wait_since):.0f} 秒")
+                        # 卡住偵測：距離沒在縮短就警告，並把模式一起印出來
+                        # （搶控制權的症狀就是「模式是 OFFBOARD 而且不動」）。
+                        if stuck_ref is None:
+                            stuck_ref = (now_t, d_now)
+                        elif now_t - stuck_ref[0] >= TRACK_SEARCH_STUCK_S:
+                            if stuck_ref[1] - d_now < TRACK_SEARCH_STUCK_M:
+                                self.get_logger().warn(
+                                    f"[track] 搜尋卡住了："
+                                    f"{now_t - stuck_ref[0]:.0f} 秒內到第 {s_i} 點只"
+                                    f"前進 {stuck_ref[1] - d_now:+.2f} m"
+                                    f"（剩 {d_now:.1f} m，模式 {self._nav_name()}）。"
+                                    f"模式不是 AUTO_LOITER 的話就是有人在搶控制權")
+                            stuck_ref = (now_t, d_now)
+
                         self._track_info["searching"] = True
                         self._track_info["search_s"] = round(
                             time.monotonic() - wait_since, 1)
@@ -1545,6 +1682,16 @@ class DroneApi(Node):
                         if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
                             self._end_task(False, f"掃描轉向被拒絕：{self._ack_text(r)}")
                             return
+                        # 這條路也會被搶控制權（和巡航搜尋同一個病），只是症狀
+                        # 輕得多：機頭不轉而已，不會「該飛卻停著」。所以這裡
+                        # 不重試 —— 每一拍本來就重送一次，等於自帶重試 ——
+                        # 只警告一次，免得每秒洗一行 log。
+                        if not scan_warned and not self._left_offboard():
+                            scan_warned = True
+                            self.get_logger().warn(
+                                f"[track] 掃描轉向被 ACCEPTED 了，但模式還是 "
+                                f"{self._nav_name()} —— 有人在搶控制權"
+                                f"（通常是 cmd_vel 橋），機頭可能不會轉")
                     searched = time.monotonic() - wait_since
                     self._track_info["searching"] = True
                     self._track_info["search_s"] = round(searched, 1)
@@ -1770,8 +1917,34 @@ class DroneApi(Node):
             #    會讓它一直維持原地定點、把 PX4 鎖在 OFFBOARD ——
             #    所以明確呼叫 release_hold 交棒（見 _release_bridge_hold）。
             #    放在 finally：不管是正常結束、被取消、還是丟例外都要交還。
+            #
+            # 🔴 2026-10-20：交棒**之前**一定要先煞停。release_hold 只是讓
+            #    bridge 停送 setpoint，而 PX4 在 OFFBOARD 失去 setpoint 會
+            #    保持最後那一則速度指令繼續飛（實測飄了 8 秒都沒衰減，
+            #    見 TRACK_STOP_TICKS 的說明）。
             if cmd_vel_active:
+                for _ in range(TRACK_STOP_TICKS):
+                    self._send_cmd_vel(0.0, 0.0, 0.0)
+                    # 被取消時提早跳出：hover/land 自己會做完整的收尾
+                    # （_settle_after_cancel），不需要在這裡等滿。
+                    if self._track_stop.wait(TRACK_UPDATE_S):
+                        break
                 self._release_bridge_hold()
+                # 被取消的話到這裡就結束：取消我們的人（hover / land / 新的
+                # track）自己會做完整的 _settle_after_cancel。在這裡多等
+                # 0.8 秒又送一道 DO_REPOSITION 只會和它打架，而且會讓
+                # _cancel_track 的 join(timeout=5.0) 逼近逾時
+                # —— join 逾時之後兩邊就真的同時在動飛機了。
+                if not self._track_stop.is_set():
+                    # 等 bridge 真的放手（比它的 cmd_timeout_s 長），再把飛機
+                    # 交給 AUTO 定在這裡。不交的話 PX4 會留在 OFFBOARD 等
+                    # setpoint，而我們已經沒有人在送了。
+                    time.sleep(self.cancel_settle_s)
+                    self._pause_here()
+                    if not self._left_offboard():
+                        self.get_logger().warn(
+                            f"[track] 收尾：已經歸零速度並交棒，但模式還是 "
+                            f"{self._nav_name()} —— 飛機不會飄走，但沒有切回 AUTO")
             # 追蹤結束的結果也要寫進 last_message，否則那一欄會凍在「開始追蹤…」，
             # 看不出來是追完了還是中途失敗。
             # 判 name == "track"：被別的指令接手時 _task 已經換成新指令了，
@@ -1789,6 +1962,33 @@ class DroneApi(Node):
     # -------------------------------------------------------------------------
     #  巡航
     # -------------------------------------------------------------------------
+
+    def _origin_map(self):
+        """PX4 本地原點在 map 的座標 (x, y)。沒設定或格式不對回 None。
+
+        只有這一個地方解析 local_origin_map —— 之前 _map_to_local、
+        _local_to_map 各自解析一次，新增第三個用途（目標位置）時就會變成
+        三份一樣的程式。座標轉換是這個專案踩過最多次的雷，所以它只能有一個
+        出處。雙向一致性由 test/t_coords.py 把關。
+        """
+        parts = [v for v in self.local_origin_map.replace(" ", "").split(",") if v]
+        if len(parts) < 2:
+            return None
+        try:
+            return (float(parts[0]), float(parts[1]))
+        except ValueError:
+            return None
+
+    def _ned_to_map(self, nx, ny):
+        """任意一個本地 NED 點 (北, 東) → map 座標 (x, y)。算不出來回 None。
+
+        _local_to_map 是「飛機自己」的版本（還要算機頭角度）；這個是給別的
+        東西用的 —— 目前是視覺目標的位置和搜尋環線的航點。
+        """
+        o = self._origin_map()
+        if o is None:
+            return None
+        return (o[0] + ny, o[1] + nx)
 
     def _map_to_local(self, mx, my):
         """map 座標（ENU：x 東、y 北）→ PX4 本地座標（NED：x 北、y 東）。
@@ -1808,13 +2008,10 @@ class DroneApi(Node):
 
         回傳 None 表示 local_origin_map 沒設定或格式不對。
         """
-        parts = [v for v in self.local_origin_map.replace(" ", "").split(",") if v]
-        if len(parts) < 2:
+        o = self._origin_map()
+        if o is None:
             return None
-        try:
-            ox, oy = float(parts[0]), float(parts[1])
-        except ValueError:
-            return None
+        ox, oy = o
         return (my - oy, mx - ox)
 
     def _local_to_map(self):
@@ -1834,13 +2031,10 @@ class DroneApi(Node):
         """
         if self.lpos is None or not self.lpos.xy_valid:
             return None
-        parts = [v for v in self.local_origin_map.replace(" ", "").split(",") if v]
-        if len(parts) < 2:
+        o = self._origin_map()
+        if o is None:
             return None
-        try:
-            ox, oy = float(parts[0]), float(parts[1])
-        except ValueError:
-            return None
+        ox, oy = o
         deg = 90.0 - math.degrees(float(self.lpos.heading))
         return (ox + float(self.lpos.y), oy + float(self.lpos.x),
                 (deg + 180.0) % 360.0 - 180.0)
@@ -2146,7 +2340,7 @@ class DroneApi(Node):
             done.add("nav")
         return done
 
-    def _settle_after_cancel(self, canceled):
+    def _settle_after_cancel(self, canceled, force_handover=True):
         """取消之後把飛機交回「沒有人在驅動」的狀態。
 
         兩類動作要用不同手段收尾，這是 L3 的核心：
@@ -2175,12 +2369,64 @@ class DroneApi(Node):
         放手。cmd_vel 要是不停（L4 的視覺追蹤就是這樣），hover 會輸。
 
         所以取消到 nav 時要等過 bridge 的逾時再往下走。
+
+        ---------------------------------------------------------------------
+        force_handover（2026-10-20 加）
+        ---------------------------------------------------------------------
+        🔴 上面那個「取消到 nav 才等」的條件漏掉一整類情況：**Nav2 自己把
+           目標跑完了**。那時 _nav_handle 已經是 None，_cancel_nav 回 False，
+           canceled 是空集合 —— 於是完全不等。
+
+        但「Nav2 停發 cmd_vel」不等於「bridge 放手了」：bridge 要等自己的
+        cmd_timeout_s 才會停止 ensureOffboard()，而實測更久（那一趟是
+        goto 完成後 10.1 秒才回 AUTO_LOITER）。這段期間送出去的
+        DO_REPOSITION 會被 ACCEPTED、然後在 30 毫秒內被搶回 OFFBOARD。
+
+        所以**預設就是 force_handover=True**：不管有沒有取消到東西，一律主動
+        請 bridge 放手並等過它的逾時。多等 0.8 秒換掉一個查不出來的 10 秒
+        靜止，很值得。
+
+        為什麼是預設而不是「需要的人自己傳」：這個洞在**每一個走 AUTO 模式的
+        動作**上都成立 —— hover 切 AUTO_LOITER、land 切 AUTO_LAND、
+        patrol 和 set_altitude 送 DO_REPOSITION，被搶走的症狀分別是
+        「按了盤旋但飛機還在飄」、「降落指令被推翻」、「飛到第 1 個點逾時」、
+        「按了改高度但沒變」。預設安全，新加的動作才不會又踩一次。
+
+        傳 False 的只有兩種動作：
+
+            goto      它**就是要**走 OFFBOARD（Nav2 → cmd_vel → bridge），
+                      請 bridge 放手是反效果
+            takeoff   飛機在地上，bridge 不可能在握（要飛起來才有 cmd_vel），
+                      等 0.8 秒純粹是讓按鈕變慢
+
+        ⚠️ force_handover 會多呼叫一次 release_hold。它是一次性的
+           （收到新 cmd_vel 就清掉，cmd_vel_to_px4_node.cpp:231-234），
+           對實機的 hold_on_timeout=true 是必要的，對模擬無害。
+
+        代價是每個動作固定多 cancel_settle_s（0.8 秒）。實測（2026-10-20
+        SITL）節點端 hover 0.835 秒、land 0.810 秒，幾乎全部是這個 sleep。
+
+        🔜 **可以省掉的那 0.8 秒**（下次連同 SITL 一起驗再改）：
+           只有 bridge 握著控制權時才需要等，而那件事有精確的判準 ——
+           **PX4 在 OFFBOARD** 就是 bridge 在握（只有它會讓 PX4 進 OFFBOARD）。
+           所以開頭可以加：
+
+               if force_handover and self._left_offboard():
+                   force_handover = False      # 沒有人握著，不用等
+
+           這樣 0.8 秒只出現在真正需要的時候：「剛跑完 goto」會等，
+           「單純盤旋中按降落」立刻就降。
+           這一輪刻意沒改 —— 它會新增一條還沒跑過 SITL 的路徑，而現在
+           這個固定 0.8 秒的版本已經實測過 hover / land 都正確。
         """
         if canceled & {"patrol", "track"}:
             self._pause_here()
         # track 的跟隨階段和 nav 一樣走 offboard，都要等 bridge 放手之後
         # 才能把飛機交給別的模式（見上面的說明）。
-        if canceled & {"nav", "track"}:
+        if force_handover or (canceled & {"nav", "track"}):
+            if force_handover:
+                # 主動交棒，不要只是等 bridge 自己逾時 —— 它可能等很久
+                self._release_bridge_hold()
             # 比 bridge 的 cmd_timeout_s 預設 0.5 秒多一點餘裕。
             # 這裡用 sleep 是可以的 —— 服務在互斥群組，訂閱在可重入群組，
             # 睡著期間狀態還是在更新（和 _send 等 ack 同一個道理）。
@@ -2229,6 +2475,63 @@ class DroneApi(Node):
         except Exception as e:                       # noqa: BLE001
             self.get_logger().warn(f"[track] release_hold 送不出去：{e}")
             return False
+
+    def _left_offboard(self):
+        """PX4 現在已經不在 OFFBOARD 了嗎？狀態還沒收到時當成「不知道」→ False。"""
+        return (self.status is not None
+                and self.status.nav_state != VehicleStatus.NAVIGATION_STATE_OFFBOARD)
+
+    def _send_search_waypoint(self, px, py, alt_amsl):
+        """送一個搜尋航點（DO_REPOSITION），並確認 PX4 真的接手了。
+
+        🔴 為什麼不能只看 ACK：Commander 收到 DO_REPOSITION 只做一件事 ——
+           切 AUTO_LOITER，切成功就回 ACCEPTED（Commander.cpp:756-778）。
+           「切完之後有沒有人把模式搶回去」不在它的 ACK 範圍裡。
+           2026-10-20 實測到的競態就是 ACK ACCEPTED，30 毫秒後 bridge 的
+           ensureOffboard() 把模式搶回 OFFBOARD，航點作廢、飛機定在原地
+           10.1 秒，而 log 上一片祥和。詳見 TRACK_SEARCH_CONFIRM_S 的說明。
+
+        所以這裡多做一步：送完回頭看 nav_state 有沒有真的離開 OFFBOARD。
+        還在 OFFBOARD 就表示有人在搶 —— 請它放手再重送，最多
+        TRACK_SEARCH_TRIES 次。
+
+        機頭一律朝行進方向：相機俯角 67°，只看得到前方幾公尺，
+        機頭不轉等於閉著眼睛飛（和 _patrol_worker 同一個理由）。
+
+        回傳三種值：
+            True   送出去了，而且 PX4 已經離開 OFFBOARD（navigator 真的在飛）
+            str    失敗的原因 —— 呼叫端要結束任務
+            None   追蹤被取消 —— 呼叫端直接 return
+        """
+        lat, lon = self._local_to_global(px, py)
+        for attempt in range(1, TRACK_SEARCH_TRIES + 1):
+            yaw = math.atan2(py - float(self.lpos.y), px - float(self.lpos.x))
+            r = self._send(VehicleCommand.VEHICLE_CMD_DO_REPOSITION,
+                           p1=-1.0, p2=REPOSITION_CHANGE_MODE,
+                           p4=yaw, p5=lat, p6=lon, p7=alt_amsl)
+            if r != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
+                return f"搜尋航點被拒絕：{self._ack_text(r)}"
+
+            # 等 PX4 真的離開 OFFBOARD。用輪詢而不是等一個固定的時間 ——
+            # 正常情況下 20 毫秒就切好了，沒有必要每個航點都多花 1 秒。
+            t_end = time.monotonic() + TRACK_SEARCH_CONFIRM_S
+            while time.monotonic() < t_end:
+                if self._left_offboard():
+                    return True
+                if self._track_stop.wait(0.05):
+                    return None
+
+            if attempt < TRACK_SEARCH_TRIES:
+                self.get_logger().warn(
+                    f"[track] 搜尋航點被 ACCEPTED 了，但 {TRACK_SEARCH_CONFIRM_S:.0f} 秒後"
+                    f"模式還是 OFFBOARD —— 有人在搶控制權（通常是 cmd_vel 橋）。"
+                    f"請它放手並重送（第 {attempt}/{TRACK_SEARCH_TRIES} 次）")
+                self._release_bridge_hold()
+                if self._track_stop.wait(self.cancel_settle_s):
+                    return None
+
+        return (f"搜尋航點送了 {TRACK_SEARCH_TRIES} 次，PX4 都留在 OFFBOARD —— "
+                "有別的東西在送 cmd_vel 搶控制權，飛機不會去巡航")
 
     def _ned_to_body(self, dn, de):
         """世界 NED 的位移 → 機體 FLU 的（前, 左）。

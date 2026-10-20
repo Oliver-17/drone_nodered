@@ -180,6 +180,48 @@ flowchart LR
 > `DO_SET_MODE` 把 PX4 拉回 OFFBOARD。所以**切回 AUTO 之前必須先停送並等逾時**，
 > 否則 AUTO 和 OFFBOARD 會互搶，而且不會有任何錯誤訊息。
 
+> 🔴 **「Nav2 跑完了」不等於「bridge 放手了」**（2026-10-20 實測）
+>
+> 這是上面那條警告最容易漏掉的一種情況。`api/goto` **正常完成**時，
+> `_nav_handle` 已經清空、`_cancel_nav()` 回 `False` —— 看起來「沒有東西在
+> 驅動飛機」，但 bridge 還在自己的 `cmd_timeout_s` 裡，照樣會搶模式。
+> 那一趟從飛行記錄量到的是：
+>
+> | 時間 | 事件 |
+> | --- | --- |
+> | 58.15 s | `api/track` 送出第一個搜尋航點 → ACK **ACCEPTED** |
+> | 58.17 s | PX4 → `AUTO_LOITER`，navigator 接手 |
+> | 58.18 s | bridge 送 `DO_SET_MODE` 搶回去 |
+> | 58.20 s | PX4 → `OFFBOARD`，搜尋航點作廢 |
+> | 68.26 s | bridge 終於放手 → `AUTO_LOITER`。**白站 10.1 秒** |
+>
+> 使用者看到的症狀是「它沒有去巡航找車，是車自己開進視野才追上的」。
+>
+> 兩道防線（兩道都要，缺一個就會再發生）：
+> 1. `_settle_after_cancel()` 的 `force_handover` **預設 True** ——
+>    不管有沒有取消到東西，都主動請 bridge 放手並等過它的逾時
+>    （哪些動作交接見下面那張表）
+> 2. `_send_search_waypoint()` 送完**回頭確認 `nav_state` 真的離開 OFFBOARD**，
+>    還在就請它放手再重送（最多 3 次）
+>
+> 🔴 為什麼第 2 道不能省：**ACK 查不出這個病**。Commander 收到
+> `DO_REPOSITION` 只做一件事 —— 切 `AUTO_LOITER`，切成功就回 `ACCEPTED`
+> （`Commander.cpp:756-778`）。「切完之後有沒有人把模式搶走」不在它的 ACK
+> 範圍裡。
+
+**哪些動作要跟 bridge 交接**（`force_handover`）—— 這個洞在每一個走 AUTO 模式的
+動作上都成立，所以做成預設值：
+
+| 動作 | 走哪個模式 | 交接 | 被搶走的症狀 |
+| --- | --- | --- | --- |
+| `hover` | AUTO_LOITER | ✅ | 按了盤旋但飛機還在飄 |
+| `land` | AUTO_LAND | ✅ | 降落指令被推翻 |
+| `patrol` | DO_REPOSITION | ✅ | 飛到第 1 個點逾時 |
+| `set_altitude` | DO_REPOSITION | ✅ | 按了改高度但沒變 |
+| `track` 搜尋段 | DO_REPOSITION | ✅ | **站著不動，而且沒有任何錯誤訊息** |
+| `goto` | OFFBOARD | ❌ 刻意不交接 | —（它就是要用 bridge） |
+| `takeoff` | AUTO_TAKEOFF | ❌ 不需要 | —（在地上，bridge 不可能在握） |
+
 ---
 
 ## 4. 視覺鏈（AI 分析感測的那一段）
@@ -355,7 +397,8 @@ stateDiagram-v2
     FOLLOW --> [*] : 追滿 duration 秒
     note right of SEARCH
         PX4 AUTO 模式
-        每秒一道 DO_REPOSITION
+        換航點時送 DO_REPOSITION
+        送完確認 nav_state 離開 OFFBOARD
         沿 search_loop 四點繞
         速度 2.0 m/s
     end note
@@ -483,6 +526,9 @@ flowchart LR
 | 「我們用 VisDrone 訓練模型」 | ❌ 我們**沒有訓練任何東西**，用的是社群訓練好的權重 |
 | 「影像會被縮小丟給 YOLO」 | ❌ 相機長邊剛好 640 = `imgsz`，縮放倍率 1.0 |
 | 「改了 flow 檔重啟服務就生效」 | ❌ Node-RED 跑的是 `~/.node-red/flows.json`，要跑 `install_flows.sh` |
+| 「指令 ACK ACCEPTED 就是生效了」 | ❌ `DO_REPOSITION` 的 ACCEPTED 只代表「模式切成功」。30 毫秒後被搶走它也不會告訴你 |
+| 「goto 完成了，控制權就回來了」 | ❌ bridge 還在它的 `cmd_timeout_s` 裡，照樣搶模式。要主動 `release_hold` 並等過逾時 |
+| 「地圖上的紅點是車的真實位置」 | ❌ 是 **YOLO 算出來的**位置。它和無人機的相對位置就是追蹤誤差；跟丟時會凍住並變灰 |
 
 ---
 
