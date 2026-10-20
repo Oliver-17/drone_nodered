@@ -49,8 +49,11 @@ def _load_methods():
     """
     with open(NODE, encoding="utf-8") as f:
         src = f.read()
-    want = ("_parse_no_fly", "_box_entry_axis", "_clamp_no_fly", "_map_to_local",
-            "_target_velocity")
+    # _origin_map 是 _map_to_local 的依賴（2026-10-20 把 local_origin_map 的
+    # 解析提取出來，三個座標轉換共用一份）。挖出來的 method 是裸的 ——
+    # 它自己的依賴也要一起挖，不然會在 exec 之後才 AttributeError。
+    want = ("_parse_no_fly", "_box_entry_axis", "_clamp_no_fly", "_origin_map",
+            "_map_to_local", "_target_velocity")
     chunks = []
     for name in want:
         # 從 "    def <name>(" 一路抓到下一個同縮排的 def／class 之前
