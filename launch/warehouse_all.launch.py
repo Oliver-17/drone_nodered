@@ -120,6 +120,23 @@ def _no_fly():
     return m.group(1).replace(" ", "") if m else ""
 
 
+def _target_spawn():
+    """從幾何檔讀目標車的生成位置，回傳 "x,y" 字串（讀不到回空字串）。
+
+    只給儀表板畫「還沒偵測到車之前車應該在哪」，所以讀不到就不顯示車 ——
+    和 _no_fly() 同一個等級（少一個方便，不會飛錯地方），**不 raise**。
+    """
+    path = os.path.join(get_package_share_directory(PKG), "config",
+                        f"{WORLD}_geometry.yaml")
+    try:
+        with open(path, encoding="utf-8") as f:
+            m = re.search(r"^target_spawn:\s*\[\s*([-\d.]+)\s*,\s*([-\d.]+)\s*\]",
+                          f.read(), re.M)
+    except OSError:
+        return ""
+    return f"{m.group(1)},{m.group(2)}" if m else ""
+
+
 def _default_detector():
     """讀世界檔，決定預設用哪個偵測器。
 
@@ -304,6 +321,10 @@ def generate_launch_description():
                     # 跟隨是 cmd_vel 直通 offboard、不經過 Nav2，所以 costmap 的
                     # 保護在那一段完全不存在 —— 2026-10-19 撞過一次貨架。
                     "no_fly_boxes": _no_fly(),
+                    # 儀表板用：車生在哪。紅點是 YOLO 看到的位置，所以飛機
+                    # 還沒看到車之前地圖上本來完全沒有車 —— 這個值讓它
+                    # 一開始就畫出「車應該在哪」（空心圓圈）。
+                    "target_home_map": _target_spawn(),
                 }.items(),
                 condition=IfCondition(LaunchConfiguration("api")),
             ),

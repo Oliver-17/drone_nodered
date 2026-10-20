@@ -55,6 +55,14 @@ def generate_launch_description():
         DeclareLaunchArgument("no_fly_boxes", default_value="",
                               description="跟隨段的禁飛方框，map 座標攤平成一串，"
                                           "每 4 個一組 x_min,y_min,x_max,y_max"),
+        # 目標車的出生位置（map 座標 "x,y"）。只影響儀表板：地圖在**還沒
+        # 偵測到車之前**畫這個位置（空心圓圈 ＝「設定值，不是看到的」）。
+        # 偵測到之後實心紅點就取代它。空字串 = 偵測到才會有車（實機就是這樣）。
+        # 倉庫場景由 warehouse_all.launch.py 從 warehouse_geometry.yaml 的
+        # target_spawn 自動帶入。
+        DeclareLaunchArgument("target_home_map", default_value="",
+                              description='目標車的出生位置，map 座標 "x,y"。'
+                                          "只給儀表板畫「還沒看到車時車在哪」"),
         DeclareLaunchArgument("no_fly_margin_m", default_value="0.8",
                               description="禁飛方框往外膨脹多少（飛機半徑的餘裕）。"
                                           "0.8 沿用 Nav2 的 robot_radius 0.5 再加一點"),
@@ -89,6 +97,7 @@ def generate_launch_description():
                 #    而「空字串 → 空陣列」在那條路上會變成型別錯誤。
                 #    節點自己剖析（和 local_origin_map 同一個做法）最不容易壞。
                 "no_fly_boxes": LaunchConfiguration("no_fly_boxes"),
+                "target_home_map": LaunchConfiguration("target_home_map"),
                 "no_fly_margin_m": ParameterValue(
                     LaunchConfiguration("no_fly_margin_m"), value_type=float),
                 "no_fly_lookahead_s": ParameterValue(

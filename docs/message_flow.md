@@ -489,7 +489,10 @@ sequenceDiagram
 | `ready`（px4 / position / nav2 / bridge） | 就緒燈。**刻意不含視覺偵測** |
 | `altitude_m`、`speed_mps` | 高度表、水平速度表 |
 | `map_x` / `map_y` / `map_heading_deg` | 地圖上的無人機位置 |
+| `target_map_x` / `target_map_y` / `target_age_s` | 地圖上的車（**YOLO 算的**，不是真值）。`age > target_lost_s` 就畫成灰的 |
 | `scene.boxes` | 地圖的場地幾何（貨架 + 外牆） |
+| `scene.target_home` | 車的**出生點**（設定值）。還沒偵測到車時畫成紅色空心圈 |
+| `track.search_map` | 搜尋環線（map 座標），追蹤時才有 |
 | `task`、`patrol`、`track`、`nav` | 任務進度文字 |
 | `watchdog` | 看門狗有沒有跳 |
 
@@ -529,6 +532,7 @@ flowchart LR
 | 「指令 ACK ACCEPTED 就是生效了」 | ❌ `DO_REPOSITION` 的 ACCEPTED 只代表「模式切成功」。30 毫秒後被搶走它也不會告訴你 |
 | 「goto 完成了，控制權就回來了」 | ❌ bridge 還在它的 `cmd_timeout_s` 裡，照樣搶模式。要主動 `release_hold` 並等過逾時 |
 | 「地圖上的紅點是車的真實位置」 | ❌ 是 **YOLO 算出來的**位置。它和無人機的相對位置就是追蹤誤差；跟丟時會凍住並變灰 |
+| 「一開始那個紅色空心圈是偵測到車了」 | ❌ 那是世界檔的**出生點**（`scene.target_home`），純設定值、不會跟著車動。偵測到之後才換成實心紅點 |
 
 ---
 

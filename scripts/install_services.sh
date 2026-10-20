@@ -117,6 +117,18 @@ if [ -z "$NO_FLY" ]; then
     echo "        之後重跑這支。"
 fi
 
+# --- 目標車的出生位置（2026-10-20 新增）------------------------------------
+# 只影響儀表板：地圖上的紅點是 YOLO 看到的位置，所以飛機還沒看到車之前
+# 地圖上完全沒有車。這個值讓它一開始就畫出「車應該在哪」（空心圓圈）。
+# 讀不到就只是「偵測到才看得到車」—— 沒有安全影響，所以不多話。
+TARGET_HOME=""
+if [ -f "$GEOM" ]; then
+    TARGET_HOME="$(sed -n 's/^target_spawn: *\[ *\([-0-9.]*\) *, *\([-0-9.]*\) *\].*/\1,\2/p' "$GEOM")"
+fi
+if [ -z "$TARGET_HOME" ]; then
+    echo "⚠ 讀不到 $GEOM 的 target_spawn —— 儀表板要偵測到車才會顯示車。"
+fi
+
 install_one() {
     local name="$1"
     local src="$PKG_SRC/systemd/$name.in"
@@ -143,7 +155,8 @@ install_one() {
           -e "s|@PKG_SRC@|$PKG_SRC|g" \
           -e "s|@LOCAL_ORIGIN@|$LOCAL_ORIGIN|g" \
           -e "s|@CAMERA_PITCH@|$CAMERA_PITCH|g" \
-          -e "s|@NO_FLY@|$NO_FLY|g" "$src"
+          -e "s|@NO_FLY@|$NO_FLY|g" \
+          -e "s|@TARGET_HOME@|$TARGET_HOME|g" "$src"
     } > "$dst"
     echo "  ✓ $action $dst"
 }

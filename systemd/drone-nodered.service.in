@@ -23,7 +23,7 @@ Type=simple
 # 為什麼要 exec：讓 ros2 launch 直接「變成」這個服務的主程式，而不是 bash 的子程序。
 # bash 通常會自己做這個最佳化，明寫出來是保險 —— 之後有人在後面多加一行指令，
 # 也不會變成 systemd 盯著 bash、真正的 launch 被丟在下面一層。
-ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch drone_nodered nodered_all.launch.py max_takeoff_altitude:=6.0 local_origin_map:="@LOCAL_ORIGIN@" camera_pitch_deg:=@CAMERA_PITCH@ no_fly_boxes:="@NO_FLY@"'
+ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch drone_nodered nodered_all.launch.py max_takeoff_altitude:=6.0 local_origin_map:="@LOCAL_ORIGIN@" camera_pitch_deg:=@CAMERA_PITCH@ no_fly_boxes:="@NO_FLY@" target_home_map:="@TARGET_HOME@"'
 
 # 參數的理由（2026-10-08 新增）：
 #   max_takeoff_altitude:=6.0  倉庫的巡航高度是 5.0（貨架 7 m、屋頂 8 m），
@@ -36,6 +36,11 @@ ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.b
 #   camera_pitch_deg           相機俯角。api/track 的 distance=0 用它算最佳跟隨
 #                              距離（＝高度/tan(俯角)，光軸打到地面的位置）。
 #                              要和 x500_cam_down 的模型一致。
+#   no_fly_boxes               api/track 跟隨段的禁飛方框（貨架＋外牆）。那一段是
+#                              cmd_vel 直通 offboard、不經過 Nav2 → 沒有任何避障。
+#                              同樣由 install_services.sh 從幾何檔填入。
+#   target_home_map            目標車的出生位置，只給儀表板畫「還沒看到車時
+#                              車應該在哪」（空心圓圈）。空的就是偵測到才顯示。
 
 # 收工要多久：rosbridge 和 Node-RED 很快，這裡給足裕度
 TimeoutStopSec=30

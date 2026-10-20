@@ -415,6 +415,18 @@ class DroneApi(Node):
         #    給儀表板的地圖畫）。先給一個空的，剖析失敗時才不會是未定義。
         self._scene_boxes = []
         self._no_fly = self._parse_no_fly(p("no_fly_boxes", ""))
+        # --- 目標車的出生位置（2026-10-20）--------------------------------
+        # 儀表板的紅點是 YOLO 看到的位置，所以**還沒看到車之前地圖上沒有車**。
+        # 「一開始就看得到車在哪」要的是場景設定值：世界檔把車生在哪裡。
+        # 格式 "x,y"（map 座標），來源是 warehouse_geometry.yaml 的 target_spawn。
+        #
+        # ⚠️ 這**不是**量到的位置，只是「車應該在這裡」——
+        #    所以前端畫成空心圓圈，而且一旦真的偵測到就讓實心紅點取代它。
+        #    車開走之後這個圈就是過時的，這是刻意的取捨：知道「車本來在哪」
+        #    比地圖上完全沒有車有用。
+        # ⚠️ 和 no_fly_boxes 不一樣，這裡**不需要** local_origin_map ——
+        #    它只是拿去畫，不換算成 NED。所以沒有起飛點資訊時照樣能顯示。
+        self._target_home_map = self._parse_target_home(p("target_home_map", ""))
 
         # ⚠️ 執行緒模型：服務要「等 PX4 的 ack」才回覆。
         #    單執行緒的話，服務回呼在等待時，收 ack 的訂閱回呼永遠排不到 —— 死鎖。
@@ -590,6 +602,12 @@ class DroneApi(Node):
                 "api/track 跟隨段**沒有禁飛方框** —— 那一段是 cmd_vel 直通 "
                 "offboard、不經過 Nav2，所以沒有任何避障。"
                 "倉庫場景請用 warehouse_all.launch.py 啟動（它會自動帶入）")
+        # 車的出生位置：只影響儀表板的顯示，所以沒設定時不警告（實機就是沒有）。
+        if self._target_home_map is not None:
+            self.get_logger().info(
+                f"儀表板的車：還沒偵測到時畫在 map"
+                f"({self._target_home_map[0]:.1f}, {self._target_home_map[1]:.1f})"
+                "（世界檔的生成位置，空心圓圈）")
         self.get_logger().info(
             f"goto 用的 Nav2 action：{self.nav_action}"
             f"（逾時 {self.goto_timeout:.0f} 秒）。"
@@ -695,6 +713,10 @@ class DroneApi(Node):
         #    隨時可能重連（重新整理瀏覽器就會），只送一次的話重連後地圖是空的，
         #    而且不會有任何錯誤訊息。走本機 websocket，這個量可以忽略。
         d["scene"] = {"boxes": self._scene_boxes}
+        # 車的出生位置（設定值，不是量到的）。前端在還沒偵測到車之前畫這個，
+        # 和 boxes 一樣每一拍都送 —— 理由同上（瀏覽器重連）。
+        if self._target_home_map is not None:
+            d["scene"]["target_home"] = list(self._target_home_map)
         # 視覺目標現在在哪（2026-10-20）。⚠️ 這是 **YOLO 算出來的位置**，
         # 不是 Gazebo 的真值 —— 所以儀表板上的紅點和無人機的相對位置，
         # 直接就是追蹤誤差；跟丟的時候紅點會凍住。實機也有這個資訊。
@@ -1962,6 +1984,26 @@ class DroneApi(Node):
     # -------------------------------------------------------------------------
     #  巡航
     # -------------------------------------------------------------------------
+
+    def _parse_target_home(self, raw):
+        """剖析 target_home_map 參數（"x,y"）→ (x, y) 或 None。
+
+        沒設定就安靜地回 None（實機沒有這個資訊，那是正常狀態）；
+        格式不對才警告 —— 「設錯了」和「沒設」要分得出來，不然打錯一個字
+        會變成「儀表板上就是沒有車」這種查不出原因的症狀。
+        """
+        parts = [v for v in raw.replace(" ", "").split(",") if v]
+        if not parts:
+            return None
+        try:
+            if len(parts) != 2:
+                raise ValueError
+            return (float(parts[0]), float(parts[1]))
+        except ValueError:
+            self.get_logger().warning(
+                f"target_home_map 的格式不對：{raw!r}（要 \"x,y\"）"
+                " → 儀表板在偵測到車之前不會顯示車")
+            return None
 
     def _origin_map(self):
         """PX4 本地原點在 map 的座標 (x, y)。沒設定或格式不對回 None。

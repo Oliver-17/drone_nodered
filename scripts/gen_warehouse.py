@@ -107,6 +107,12 @@ SPAWN = (-14.0, -9.0)
 PATROL_AISLE_X = 0.0
 PATROL_Y_RANGE = (-6.0, 6.0)
 
+# 車在世界檔裡的生成位置（走道南端）。
+# ⚠️ 這個名字存在的理由：世界檔的 <pose> 和幾何檔的 target_spawn 必須是
+#    **同一組數字**。儀表板在還沒看到車之前，就是畫這個位置當「車應該在哪」——
+#    兩邊各寫一次的話，改了世界檔而忘了幾何檔，儀表板會靜默地指向舊位置。
+TARGET_SPAWN = (PATROL_AISLE_X, PATROL_Y_RANGE[0])
+
 # --- 目標車繞行的環線（2026-10-08 改成繞一排貨架轉圈）-----------------------
 # 為什麼從「走道內南北來回」改成「繞一排貨架」：
 #   來回的路線是一條線段，飛機只要進到那條走道就一直看得到車，
@@ -453,7 +459,7 @@ def build_world_text(target="magenta"):
     <include>
       <uri>model://{_tname}</uri>
       <name>{_tname}</name>
-      <pose>{PATROL_AISLE_X} {PATROL_Y_RANGE[0]} {_tz} 0 0 0</pose>
+      <pose>{TARGET_SPAWN[0]} {TARGET_SPAWN[1]} {_tz} 0 0 0</pose>
     </include>
 
   </world>
@@ -697,6 +703,12 @@ def write_geometry():
             "# 目標車巡迴的走道與範圍（move_target.py 的 aisle 模式，已不是預設）。\n"
             "patrol_aisle_x: %.3f\n"
             "patrol_y_range: [%.3f, %.3f]\n"
+            "# 車在世界檔裡的生成位置（= 上面走道的南端）。和世界檔的 <pose>\n"
+            "# 是同一組數字（來源都是 gen_warehouse.py 的 TARGET_SPAWN）。\n"
+            "# 讀這個鍵的人：drone_api_node 的 target_home_map 參數 ——\n"
+            "# 儀表板在**還沒看到車之前**畫這個位置，標成空心圓圈表示\n"
+            "# 「這是設定值，不是看到的」。車一旦被偵測到就換成實心紅點。\n"
+            "target_spawn: [%.3f, %.3f]\n"
             "\n"
             "# --- 環線（2026-10-08 新增）---------------------------------------\n"
             "# 目標車繞第 %d 排貨架（x=%+.1f）轉圈，離貨架面 %.1f m。\n"
@@ -732,6 +744,7 @@ def write_geometry():
                SHELF_LENGTH / 2.0,
                -SHELF_LENGTH / 2.0, SHELF_LENGTH / 2.0,
                PATROL_AISLE_X, PATROL_Y_RANGE[0], PATROL_Y_RANGE[1],
+               TARGET_SPAWN[0], TARGET_SPAWN[1],
                PATROL_SHELF_INDEX, SHELF_CENTERS_X[PATROL_SHELF_INDEX],
                LOOP_OFFSET,
                PATROL_SHELF_INDEX, _loop_yaml(TARGET_LOOP),

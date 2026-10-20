@@ -95,6 +95,17 @@ def generate_launch_description():
 
                                           "每 4 個一組 x_min,y_min,x_max,y_max"),
 
+        # 目標車的出生位置（map 座標 "x,y"）。只影響儀表板：還沒偵測到車時
+        # 地圖畫這個位置當「車應該在哪」。空字串 = 偵測到才會有車。
+        # 值由 scripts/install_services.sh 從 warehouse_geometry.yaml 的
+        # target_spawn 填進 drone-nodered.service 的 ExecStart。
+
+        DeclareLaunchArgument("target_home_map", default_value="",
+
+                              description='目標車的出生位置，map 座標 "x,y"。'
+
+                                          "只給儀表板畫「還沒看到車時車在哪」"),
+
         DeclareLaunchArgument("rosbridge", default_value="true"),
         DeclareLaunchArgument("drone_api", default_value="true"),
         DeclareLaunchArgument("nodered", default_value="true"),
@@ -130,6 +141,7 @@ def generate_launch_description():
                 "local_origin_map": LaunchConfiguration("local_origin_map"),
                 "camera_pitch_deg": LaunchConfiguration("camera_pitch_deg"),
                 "no_fly_boxes": LaunchConfiguration("no_fly_boxes"),
+                "target_home_map": LaunchConfiguration("target_home_map"),
             }.items(),
             condition=IfCondition(LaunchConfiguration("drone_api")),
         ),

@@ -140,6 +140,27 @@ w.send({ boxes: BOXES })
 check(w.hasTarget === false && w.hasPose === false,
   '沒有位置欄位 → hasTarget/hasPose 都是 false（絕不退回 (0,0) 畫在場地正中）')
 
+// 🔴 出生點（2026-10-20，Oliver：「一開始車子就顯示出來好了」）
+//    紅點是 YOLO 看到的位置 → 飛機還沒看到車之前地圖上完全沒有車。
+//    出生點是場景設定值，所以①一開始就要有、②看到車之後就要讓位。
+console.log('③b 車的出生點（場景設定值，空心圈）')
+w = mount()
+w.send({ boxes: BOXES, thx: 0, thy: -6 })
+check(w.hasHome === true && w.hasTarget === false,
+  '只有出生點、還沒偵測到 → 畫空心圈（這就是「一開始就看得到車」）')
+check(Math.abs(w.home.x - 0) < 1e-9 && Math.abs(w.home.y - (-6)) < 1e-9,
+  '出生點的 map 座標照抄', JSON.stringify(w.home))
+w.send({ boxes: BOXES, thx: 0, thy: -6, tx: 5.6, ty: -2.5, tage: 0.2, tlost: 3 })
+check(w.hasTarget === true && w.hasHome === false,
+  '偵測到車 → 實心紅點取代空心圈（量到的位置優先）')
+w.send({ boxes: BOXES, thx: 0, thy: -6, tx: 5.6, ty: -2.5, tage: 9.0, tlost: 3 })
+check(w.targetStale === true && w.hasHome === false,
+  '跟丟之後畫灰點（最後看到的位置），**不要**退回出生點')
+w = mount()
+w.send({ boxes: BOXES })
+check(w.hasHome === false,
+  '節點沒送出生點（實機、或沒設 target_home_map）→ 不畫，絕不退回 (0,0)')
+
 console.log('④ 搜尋環線')
 w = mount()
 w.send({ boxes: BOXES, loop: LOOP, loop_i: 2 })
@@ -192,7 +213,7 @@ const out = split({
   altitude_m: 5.0, speed_mps: 2.1, ready: { all: true },
   map_x: 5.6, map_y: -9.0, map_heading_deg: 90.0,
   target_map_x: 5.6, target_map_y: -2.5, target_age_s: 0.2, target_lost_s: 3.0,
-  scene: { boxes: BOXES },
+  scene: { boxes: BOXES, target_home: [0, -6] },
   track: { active: true, phase: 'searching', search_index: 1, search_laps: 0,
            search_map: LOOP, search_s: 12.0, reacquire: false },
   task: {}, nav: {}, patrol: {}, watchdog: {}
@@ -203,6 +224,8 @@ check(mp.tx === 5.6 && mp.ty === -2.5 && mp.tage === 0.2 && mp.tlost === 3.0,
   '車的位置傳到地圖了', JSON.stringify({ tx: mp.tx, ty: mp.ty, tage: mp.tage }))
 check(Array.isArray(mp.loop) && mp.loop.length === 4 && mp.loop_i === 1,
   '搜尋環線和「現在第幾點」傳到地圖了')
+check(mp.thx === 0 && mp.thy === -6, '車的出生點傳到地圖了',
+  JSON.stringify({ thx: mp.thx, thy: mp.thy }))
 check(out[3].payload.includes('巡航找目標') && out[3].payload.includes('第 1 點'),
   '狀態文字顯示在找目標', out[3].payload)
 
@@ -226,9 +249,17 @@ const mp3 = split({
 check(mp3.loop === undefined, '沒在追蹤 → 不送環線')
 
 // 沒連上 PX4 的那條提早 return：場地還是要送（不然看不到倉庫）
-const early = split({ connected: false, scene: { boxes: BOXES } })
+const early = split({ connected: false, scene: { boxes: BOXES, target_home: [0, -6] } })
 check(early.length === 6 && early[5].payload.boxes.length === BOXES.length,
   '沒連上 PX4 也要送場地方框（否則只剩「等場地資料…」）')
+// 🔴 「一開始」指的就是這條路：控制台剛開、模擬還沒起來、PX4 沒連上。
+//    出生點在這裡掉了的話，使用者看到的還是「地圖上沒有車」。
+check(early[5].payload.thx === 0 && early[5].payload.thy === -6,
+  '沒連上 PX4 也要送車的出生點（這就是「一開始」那個時刻）')
+// 節點是舊版 / 實機沒設定 → 沒有這個欄位，但不能讓拆解函式壞掉
+const noHome = split({ connected: false, scene: { boxes: BOXES } })
+check(noHome[5].payload.thx === undefined,
+  '節點沒送 target_home → 不編造一個位置出來')
 
 // 整條接起來：後端 JSON → 拆解 → widget
 console.log('⑧ 端到端：後端 JSON → widget 的 computed')
@@ -239,6 +270,8 @@ check(w.hasPose && w.hasTarget && w.loop.length === 4,
 check(w.loopDots[1].cur === true, '高亮的是第 1 點', JSON.stringify(w.loopDots[1]))
 check(Math.abs(w.target.y - (-2.5)) < 1e-9 && w.targetStale === false,
   '車在 y=-2.5、紅色')
+check(w.home !== null && w.hasHome === false,
+  '出生點收到了，但已經偵測到車 → 不畫它')
 
 console.log()
 if (fails.length) {
