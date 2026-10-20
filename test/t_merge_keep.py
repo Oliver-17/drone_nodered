@@ -23,7 +23,9 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 NODERED = os.path.join(HERE, "..", "nodered")
-GEN = os.path.join(NODERED, "make_drone_basic.py")
+# ⚠️ 刻意不用（見 main() 裡的說明）：跑產生器會覆寫 repo 的 flow 檔。
+#    留著這一行是為了讓「為什麼不用它」有地方可說。
+GEN = os.path.join(NODERED, "make_drone_basic.py")   # noqa: F841
 MERGE = os.path.join(NODERED, "merge_flows.py")
 FLOWS = os.path.join(NODERED, "flows", "drone_basic.json")
 
@@ -70,7 +72,20 @@ def make_current(generated):
 
 def main():
     tmp = tempfile.mkdtemp(prefix="t_merge_")
-    subprocess.run([sys.executable, GEN], check=True, capture_output=True)
+    # 🔴 這裡**不可以**跑產生器（2026-10-20 修）。
+    #
+    #    原本是 subprocess.run([sys.executable, GEN]) —— 想確保素材是最新的，
+    #    結果變成「跑一次測試就把 flows/drone_basic.json 重新產生一遍」，
+    #    手改的東西全部消失。那天就是這樣吃掉了儀表板的地圖 widget：
+    #    repo 的檔案在跑測試後安靜地退回 133 個節點，而測試照樣通過，
+    #    下一次 install_flows.sh 就把舊版裝進 Node-RED。
+    #
+    #    產生器是**初始骨架**，不是唯一來源 —— 它自己的檔頭就寫著
+    #    「在 Node-RED 裡改了流程就匯出蓋掉 drone_basic.json」。
+    #    所以這支測試該用 repo 現在的 flow 當素材，那也才是真正會裝進
+    #    Node-RED 的那一份。
+    #
+    #    ⚠️ 推論：任何測試都不該寫 repo 裡的檔案。要寫就寫 tempfile。
     generated = json.load(open(FLOWS, encoding="utf-8"))
 
     cur_path = os.path.join(tmp, "current.json")

@@ -17,6 +17,7 @@
 import argparse
 import json
 import os
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SUBFLOWS = os.path.join(HERE, "..", "..", "nodered_ros2", "nodered", "subflows")
@@ -31,6 +32,9 @@ TAB = "d0c0ffee00000000"
 #    兩頁的節點全疊在同一頁上。改用 nid() 不會用到的尾碼。
 # --with-empty-sim 的開關（由 main() 設定）
 WITH_EMPTY_SIM = False
+# --force 的開關（由 main() 設定）。見 _ok_to_overwrite ——
+# 這支產生器抹掉過一次工作成果，現在預設不覆寫手改的內容。
+FORCE = False
 
 SYS = "d0c0ffeeffff0001"
 MISSION = "d0c0ffeeffff0002"   # 第三個分頁：把動作串成任務
@@ -970,16 +974,93 @@ def dashboard_nodes():
     return nodes
 
 
+def _ok_to_overwrite(nodes):
+    """現有的 flow 檔裡有手改的東西嗎？有就擋下來，回 False。
+
+    🔴 2026-10-20：這支產生器**抹掉過一次工作成果**。
+       儀表板的地圖 widget 是直接改在 flows/drone_basic.json 裡的
+       （照這支檔頭寫的「在 Node-RED 裡改了就匯出蓋掉」那個流程），
+       而 test/t_merge_keep.py 當時會先跑一次產生器「確保素材最新」——
+       於是跑一次測試就把地圖整個產生掉了。repo 的檔案安靜地從 135 個節點
+       退回 133 個，測試照樣通過，下一次 install_flows.sh 就把舊版裝進
+       Node-RED。那次是靠 git 才找回來的。
+
+    所以產生器不能再「無聲覆寫」。這裡比對「現有檔案」和「這次要產生的」：
+
+        會消失的節點   現有檔案有、產生器不認得 → 手改加上去的
+        會變回去的節點 兩邊都有但內容不同        → 手改過內容的
+
+    任何一種存在就擋下來並列出來。真的要重新產生（例如改了
+    nodered_ros2 的積木）就加 --force，但先看一眼列表。
+
+    ⚠️ 這個函式只讀檔案、不寫 —— 判斷和寫入分開，才不會出現
+       「擋下來了但檔案已經被 open(..., 'w') 截斷」。
+    """
+    if not os.path.exists(OUT):
+        return True
+    try:
+        with open(OUT, encoding="utf-8") as f:
+            old = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"（讀不到現有的 {os.path.basename(OUT)}：{e} → 當成新檔案處理）")
+        return True
+
+    new_by_id = {n["id"]: n for n in nodes if "id" in n}
+    gone, changed = [], []
+    for n in old:
+        i = n.get("id")
+        if i is None:
+            continue
+        if i not in new_by_id:
+            gone.append(n)
+        elif (json.dumps(n, sort_keys=True, ensure_ascii=False)
+              != json.dumps(new_by_id[i], sort_keys=True, ensure_ascii=False)):
+            changed.append(n)
+
+    if not gone and not changed:
+        return True
+
+    def _label(n):
+        return (f"{n.get('name') or n.get('label') or '(沒有名字)'}"
+                f"  [{n.get('type')}  id={n.get('id')}]")
+
+    def _list(title, items):
+        print(f"\n  {title}（{len(items)} 個）：")
+        for n in items[:20]:
+            print(f"      - {_label(n)}")
+        if len(items) > 20:
+            print(f"      … 還有 {len(items) - 20} 個")
+
+    print(f"✗ 沒有寫出 —— 現有的 {os.path.basename(OUT)} 裡有產生器做不出來的內容")
+    if gone:
+        _list("會**消失**的節點", gone)
+    if changed:
+        _list("會**變回產生器版本**的節點", changed)
+    print("""
+  這些大多是「在 Node-RED 裡改好之後匯出蓋回來」的成果（儀表板就是這樣做的）。
+  產生器是初始骨架，不是唯一來源 —— 它做不出上面那些東西。
+
+  真的要重新產生（例如改了 nodered_ros2 的積木定義）：
+      python3 nodered/make_drone_basic.py --force
+  但先確認上面的列表裡沒有你要留的東西。想保留的話，正確做法是把改動補進
+  這支產生器，而不是 --force 之後再手改一次。""")
+    return False
+
+
 def main():
     # 封存的空白世界（drone-sim.service）2026-10-12 退休。
     # 帶 --with-empty-sim 重跑這支，「系統」分頁就會多出那四顆按鈕。
     # ⚠️ 服務本身要另外裝：install_services.sh --with-empty-sim
-    global WITH_EMPTY_SIM
+    global WITH_EMPTY_SIM, FORCE
     ap = argparse.ArgumentParser(description="產生 Node-RED 流程（drone_basic.json）")
     ap.add_argument("--with-empty-sim", action="store_true",
                     help="連封存的空白世界按鈕一起產生"
                          "（服務要另外裝：install_services.sh --with-empty-sim）")
-    WITH_EMPTY_SIM = ap.parse_args().with_empty_sim
+    ap.add_argument("--force", action="store_true",
+                    help="即使會蓋掉手改的內容也照樣寫出（見 _ok_to_overwrite）")
+    args = ap.parse_args()
+    WITH_EMPTY_SIM = args.with_empty_sim
+    FORCE = args.force
     check_frozen_ids()
     nodes = load_subflows()
     nodes.append({"id": TAB, "type": "tab", "label": f"無人機控制（{NS}）", "disabled": False,
@@ -1127,10 +1208,15 @@ def main():
             n["info"] = (n.get("info", "") + "\n\ngenerated-by: drone_nodered").strip()
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    # 擋住「無聲覆寫手改的內容」—— 見 _ok_to_overwrite 的說明
+    if not FORCE and not _ok_to_overwrite(nodes):
+        return 1
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(nodes, f, ensure_ascii=False, indent=2)
     print(f"寫出 {os.path.normpath(OUT)}（{len(nodes)} 個節點，含兩個積木的定義）")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # 回傳碼要傳出去 —— 被擋下來時呼叫者（腳本、CI）才知道沒有寫出
+    sys.exit(main() or 0)

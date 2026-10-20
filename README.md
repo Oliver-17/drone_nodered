@@ -104,9 +104,12 @@ ros2 topic echo   /MAV1/api/status
 cd ~/ros2_ws && colcon build --packages-select drone_nodered && \
 systemctl --user restart drone-nodered
 
-# 改了 Node-RED 流程的產生器
-python3 ~/ros2_ws/src/drone_nodered/nodered/make_drone_basic.py
+# 改了 Node-RED 流程（不管是改產生器還是在編輯器裡改完匯出）
+# ⚠️ 只 restart 服務沒有用 —— Node-RED 跑的是 ~/.node-red/flows.json
 ~/ros2_ws/src/drone_nodered/scripts/install_flows.sh
+
+# 改了程式之後先跑測試（15 秒，不需要 ROS）
+bash ~/ros2_ws/src/drone_nodered/test/run_all.sh
 ```
 
 ---
@@ -305,9 +308,41 @@ PX4
 > **為什麼一定要先停 Node-RED**：它關閉時會把記憶體裡的流程寫回 `flows.json`，
 > 開著改檔案會被它蓋回去。
 
-改流程內容請改產生器 `nodered/make_drone_basic.py`，再重跑它產生 JSON。
+### 流程有兩種來源，別把它們搞混（2026-10-20 寫清楚）
+
+| 來源 | 什麼東西是這樣來的 | 怎麼改 |
+| --- | --- | --- |
+| 產生器 `nodered/make_drone_basic.py` | 分頁、按鈕、積木定義、接線骨架 | 改產生器 → 重跑它 |
+| 在 Node-RED 裡改好再匯出 | **儀表板**（地圖、儀表、版面）—— 那些是 `ui-template` / `ui-gauge`，產生器做不出來 | 編輯器 → 選單 → 匯出 → 蓋掉 `flows/drone_basic.json` |
+
+所以 `flows/drone_basic.json` **不是**純產生出來的檔案，它是兩種來源的合併結果。
+
+> 🔴 **產生器預設不會覆寫手改的內容。** 2026-10-20 吃過一次教訓：
+> `test/t_merge_keep.py` 當時會先跑一次產生器「確保素材最新」，結果把整個儀表板
+> 狀態列（地圖、水平速度表、拆解函式）產生掉了 —— repo 的檔案從 135 個節點安靜
+> 退回 133 個，測試照樣通過，下一次 `install_flows.sh` 就把舊版裝進 Node-RED，
+> 症狀是「我明明改了怎麼沒變」。
+>
+> 現在產生器會先比對現有檔案，列出「會消失的節點」和「會變回產生器版本的節點」
+> 並停下來。真的要重新產生（例如改了 `nodered_ros2` 的積木定義）：
+>
+> ```bash
+> python3 ~/ros2_ws/src/drone_nodered/nodered/make_drone_basic.py --force
+> ```
+>
+> **加 `--force` 之前先看一眼它列出來的清單**，裡面不該有你要留的東西。想保留的
+> 話，正確做法是把改動補進產生器，不是 `--force` 之後再手改一次。
+
 產生器結尾有一道 `assert` 會檢查節點 id 有沒有重複（撞號會讓整個分頁消失，見
 [9 踩過的雷](#9-踩過的雷)）。
+
+### 改完先跑測試
+
+```bash
+bash ~/ros2_ws/src/drone_nodered/test/run_all.sh     # 約 15 秒，不需要 ROS/Gazebo
+```
+
+七支測試各驗什麼、當初是什麼症狀 → `test/README.md`。
 
 ---
 
@@ -328,8 +363,9 @@ drone_nodered/
 │   ├── nodered_all.launch.py    控制台三件套（rosbridge / drone_api / Node-RED）
 │   └── sim_all.launch.py        模擬（agent + SITL）
 ├── nodered/
-│   ├── make_drone_basic.py      ★ 流程的產生器，要改流程改這支
-│   └── flows/drone_basic.json   產生出來的流程（不要手改）
+│   ├── make_drone_basic.py      流程的產生器（骨架；預設不覆寫手改的內容）
+│   └── flows/drone_basic.json   實際會裝進 Node-RED 的流程
+│                                ＝產生器的骨架 ＋ 儀表板（編輯器匯出的）
 ├── systemd/*.service.in         服務範本（安裝時才換成實際路徑）
 ├── desktop/*.desktop.in         桌面圖示範本
 └── gz/worlds/empty.sdf          空白世界
