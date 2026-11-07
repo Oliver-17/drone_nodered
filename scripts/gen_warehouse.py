@@ -113,6 +113,15 @@ PATROL_Y_RANGE = (-6.0, 6.0)
 #    兩邊各寫一次的話，改了世界檔而忘了幾何檔，儀表板會靜默地指向舊位置。
 TARGET_SPAWN = (PATROL_AISLE_X, PATROL_Y_RANGE[0])
 
+# --- 地面車（Husky A200，H1 2026-11-07）-------------------------------------
+# 和飛機分開 spawn：H5 要兩台同場，疊在一起 Gazebo 會把它們彈開。
+# 放在西南角開闊區、飛機正北 3 m，離貨架與外牆都夠遠（自我檢查 ④b 會驗）。
+HUSKY_SPAWN = (-14.0, -6.0)
+# 模型原點離地多高：輪心 0.035 + 輪半徑 0.17775 = 0.14275。
+# 來源是模型自己的 collision，見 husky_nodered/gz/models/husky/model.sdf 檔頭。
+# ⚠️ 給 0 的話車子會陷進地板，Gazebo 會把它彈到半空中。
+HUSKY_Z = 0.14275
+
 # --- 目標車繞行的環線（2026-10-08 改成繞一排貨架轉圈）-----------------------
 # 為什麼從「走道內南北來回」改成「繞一排貨架」：
 #   來回的路線是一條線段，飛機只要進到那條走道就一直看得到車，
@@ -333,7 +342,7 @@ def roof_model_xml():
 """
 
 
-def build_world_text(target="magenta"):
+def build_world_text(target="magenta", husky=False):
     x0, x1, y0, y1 = bounds()
     n_shelf = sum(1 for r in RECTS if r[6] == "shelf")
     header = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -461,11 +470,25 @@ def build_world_text(target="magenta"):
       <name>{_tname}</name>
       <pose>{TARGET_SPAWN[0]} {TARGET_SPAWN[1]} {_tz} 0 0 0</pose>
     </include>
+"""
 
+    # 地面車：只有 --husky-world 那份世界檔才放，飛機那份維持原樣（H1 2026-11-07）
+    husky_xml = f"""
+    <!-- ===== 地面車 Husky A200 =====
+         原廠模型（Fuel／CC0）＋ gz-sim 的 DiffDrive，模型在 husky_nodered 套件裡。
+         吃 /model/husky/cmd_vel、發 /model/husky/odom 與 tf，由 ros_gz_bridge 接到 ROS 2。
+         ⚠️ z 給 {HUSKY_Z}（模型原點離地），不是 0。 -->
+    <include>
+      <uri>model://husky</uri>
+      <name>husky</name>
+      <pose>{HUSKY_SPAWN[0]} {HUSKY_SPAWN[1]} {HUSKY_Z} 0 0 0</pose>
+    </include>
+""" if husky else ""
+
+    return header + body + footer + husky_xml + """
   </world>
 </sdf>
 """
-    return header + body + footer
 
 
 def build_map_rows():
@@ -549,6 +572,19 @@ def self_check(rows):
         d = math.hypot(dx, dy)
         if d < 0.5:
             fails.append(f"④ spawn 離 {name} 只有 {d:.2f} m（< robot_radius 0.5）")
+
+    # ④b 地面車的 spawn：可通行、離障礙物夠遠、而且不要和飛機疊在一起
+    if cell(*HUSKY_SPAWN) != PGM_FREE:
+        fails.append(f"④b Husky spawn {HUSKY_SPAWN} 不是可通行格")
+    for name, cx, cy, sx, sy, _, _, _ in RECTS:
+        dx = max(abs(HUSKY_SPAWN[0] - cx) - sx / 2, 0.0)
+        dy = max(abs(HUSKY_SPAWN[1] - cy) - sy / 2, 0.0)
+        d = math.hypot(dx, dy)
+        if d < 0.7:          # 車長一半 0.5 再留 0.2 餘裕
+            fails.append(f"④b Husky spawn 離 {name} 只有 {d:.2f} m（< 0.7）")
+    d_air = math.hypot(HUSKY_SPAWN[0] - SPAWN[0], HUSKY_SPAWN[1] - SPAWN[1])
+    if d_air < 2.0:
+        fails.append(f"④b Husky spawn 離飛機 spawn 只有 {d_air:.2f} m（< 2.0）")
 
     # ⑤ spawn 到中間走道的直線必須被貨架擋住 —— 這是「Nav2 有用」的前提
     gx, gy = PATROL_AISLE_X, 0.0
@@ -756,6 +792,23 @@ def write_geometry():
                "/".join(f"{v:+.1f}" for v in SHELF_CENTERS_X),
                ", ".join(f"{v:.3f}" for b in no_fly_boxes() for v in b))
         )
+    # 地面車的 spawn ＝ 它的「家」。和飛機一樣，這個值不能有第二個出處：
+    # husky_api_node 的 api/status 要把它當 scene.home 送給「返航」積木用。
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(
+            "\n# --- 地面車（Husky A200）---------------------------------------\n"
+            "# spawn ＝ 家。husky_api_node 要把它放進 api/status 的 scene.home，\n"
+            "# 「返航」積木才知道要導航回哪裡。z 是模型原點離地的高度。\n"
+            "husky_spawn: [%.3f, %.3f]\n"
+            "husky_spawn_z: %.5f\n"
+            "# 車體外框（給 Nav2 的 footprint 用）。來源是原廠模型：\n"
+            "# 輪距 0.5709、輪半徑 0.17775，車體約 0.99 x 0.67 m。\n"
+            "husky_footprint: [0.99, 0.67]\n"
+            "husky_wheel_separation: 0.5709\n"
+            "husky_wheel_radius: 0.17775\n"
+            "husky_max_speed: 1.0\n"
+            % (HUSKY_SPAWN[0], HUSKY_SPAWN[1], HUSKY_Z)
+        )
     return path
 
 
@@ -766,6 +819,11 @@ def main():
     ap.add_argument("--target", choices=["magenta", "hatchback"], default="magenta",
                     help="目標車的外觀：magenta=洋紅方塊（顏色偵測用，預設）、"
                          "hatchback=真車外觀（YOLO 用）")
+    ap.add_argument("--husky-world", metavar="PATH",
+                    default=os.path.join(PKG_DIR, os.pardir, "husky_nodered",
+                                         "gz", "worlds", "warehouse_husky.sdf"),
+                    help="另外寫一份「同一個倉庫 + 地面車 Husky」的世界檔到這裡"
+                         "（預設寫進 husky_nodered 套件）。給 '' 可以不寫。")
     args = ap.parse_args()
 
     x0, x1, y0, y1 = bounds()
@@ -778,6 +836,8 @@ def main():
     print(f"走道：{AISLE_WIDTH:.1f} m 寬，中心 x = "
           f"{', '.join(f'{v:+.1f}' for v in AISLE_CENTERS_X)}")
     print(f"飛機 spawn：{SPAWN}")
+    print(f"Husky spawn：{HUSKY_SPAWN}（離地 {HUSKY_Z} m，離飛機 "
+          f"{math.hypot(HUSKY_SPAWN[0] - SPAWN[0], HUSKY_SPAWN[1] - SPAWN[1]):.1f} m）")
     sx = SHELF_CENTERS_X[PATROL_SHELF_INDEX]
     print(f"目標車環線：繞第 {PATROL_SHELF_INDEX} 排貨架（x={sx:+.1f}），"
           f"離貨架面 {LOOP_OFFSET:.1f} m，周長 {loop_length(TARGET_LOOP):.1f} m")
@@ -802,8 +862,8 @@ def main():
         for f in fails:
             print("   " + f)
         return 1
-    print("✓ 自我檢查全部通過（矩形佔據、走道通行、走道寬度、spawn、直線被擋、"
-          "環線可飛、環線有繞過貨架）")
+    print("✓ 自我檢查全部通過（矩形佔據、走道通行、走道寬度、飛機與 Husky 的 spawn、"
+          "直線被擋、環線可飛、環線有繞過貨架）")
 
     if args.check_only:
         print("\n--check-only：沒有寫出任何檔案")
@@ -814,6 +874,18 @@ def main():
     with open(wpath, "w", encoding="utf-8") as f:
         f.write(build_world_text(args.target))
     print(f"\n寫出 {wpath}   （目標車：{args.target}）")
+
+    # 地面車那份：同一套幾何，多一台 Husky。
+    # ⚠️ 寫到另一個套件裡 —— 這是刻意的：幾何只能有一個來源（這支腳本），
+    #    但 Husky 的模型與 launch 屬於 husky_nodered。那份世界檔同樣「不要手改」。
+    if args.husky_world:
+        hpath = os.path.abspath(args.husky_world)
+        if os.path.isdir(os.path.dirname(hpath)):
+            with open(hpath, "w", encoding="utf-8") as f:
+                f.write(build_world_text(args.target, husky=True))
+            print(f"寫出 {hpath}   （同一個倉庫 + Husky）")
+        else:
+            print(f"跳過 {hpath}（目錄不存在 —— husky_nodered 還沒建？）")
 
     map_dir = os.path.join(PKG_DIR, "maps")
     os.makedirs(map_dir, exist_ok=True)
