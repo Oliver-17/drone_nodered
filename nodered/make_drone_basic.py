@@ -533,10 +533,17 @@ FROZEN_ACTION_IDS = {
     "d0c0ffeeaca80000": "goto",
 }
 
+# 組合積木：內部串現有積木，不對應單一服務，所以不在 ACTIONS 表裡。
+# id 一樣是對外介面（使用者分頁上的實例指向它），一樣要凍結。
+RTH_ID = act_id("a9")
+FROZEN_COMPOSITE_IDS = {RTH_ID: "返航"}
+
 
 def check_frozen_ids():
     """確認積木的 id 和它對應的服務都沒有被改掉。"""
     got = {act_id(tag): action for tag, _, action, *_ in ACTIONS}
+    assert RTH_ID not in got, f"返航的 id {RTH_ID} 和某個動作積木撞號了"
+    assert FROZEN_COMPOSITE_IDS == {RTH_ID: "返航"}, "組合積木的凍結表被改了"
     if got != FROZEN_ACTION_IDS:
         only_new = {k: v for k, v in got.items() if FROZEN_ACTION_IDS.get(k) != v}
         only_old = {k: v for k, v in FROZEN_ACTION_IDS.items() if got.get(k) != v}
@@ -598,6 +605,90 @@ def action_subflows():
              "wires": [[], []]},
         ]
     return out
+
+
+# --- 組合積木：返航（2026-10-27）------------------------------------------------
+# 「返航」沒有對應的服務 —— 它就是「導航到生成點」+「降落」。
+#
+# 為什麼不在 drone_api_node 加一個 api/return_home：
+#     這份專案的分工是「飛控端只提供原子動作，編排放在 Node-RED」。把串接
+#     搬進節點等於把 low-code 層的價值搬走，而且會多一份和積木重複的等待邏輯。
+#     返航剛好是這個主張最好的示範 —— 新行為，零新服務。
+#
+# 內部結構（巢狀 subflow，和動作積木內部嵌「ROS2 呼叫服務」是同一招）：
+#     輸入 → 取回家座標 ─→ 導航到座標 ─完成→ 降落 ─完成→ 出口1（完成）
+#                   │失敗        │失敗      │失敗
+#                   └────────────┴──────────┴──────→ 出口2（失敗）
+#
+# ⚠️ 逾時刻意不開成 env：巢狀 subflow 要把 env 傳給內層實例得靠 Node-RED 的
+#    env 參照，行為沒把握，填錯會變成逾時是 NaN（＝永遠不逾時）。內層直接用
+#    和獨立積木相同的預設值（導航 240 秒、降落 150 秒），要調就改這裡。
+RTH_FETCH = (
+    '// 回家＝飛機的生成點（PX4 本地原點），由 drone_api_node 從 local_origin_map\n'
+    '// 算出來放進狀態的 scene.home。流程層看不到節點參數，所以得這樣拿。\n'
+    '//\n'
+    '// ⚠️ 不要退回 (0,0) —— map 的原點是倉庫正中央，不是起飛點。\n'
+    '//    倉庫的生成點在 map(-14, -9)，飛去 (0,0) 會降在走道正中間。\n'
+    '//    拿不到就走失敗出口，寧可不動也不要降錯地方。\n'
+    'const s = global.get("drone_status") || {};\n'
+    'const home = (s.scene || {}).home;\n'
+    'if (!Array.isArray(home) || typeof home[0] !== "number"\n'
+    '        || typeof home[1] !== "number") {\n'
+    '    node.status({ fill: "red", shape: "ring", text: "不知道家在哪" });\n'
+    '    return [null, { payload: { 失敗: "不知道家在哪：api/status 裡沒有 scene.home，"\n'
+    '        + "表示 drone_api_node 的 local_origin_map 參數沒設定" } }];\n'
+    '}\n'
+    '// 只送「導航到座標」本來就有的欄位 —— 它的組參數會用這兩個值覆蓋積木設定。\n'
+    '// 整包 assign 會塞進服務不認得的欄位（2026-09-24 踩過）。\n'
+    'node.status({ fill: "blue", shape: "dot", text: `回家 (${home[0]}, ${home[1]})` });\n'
+    'msg.payload = { map_x: home[0], map_y: home[1] };\n'
+    'return [msg, null];'
+)
+
+
+def return_home_subflow():
+    """「返航」積木：導航回生成點然後降落。內部只用現有積木，沒有新服務。"""
+    fetch, go, land = act_id("a9", 1), act_id("a9", 2), act_id("a9", 3)
+    info = ("導航回飛機的生成點（起飛位置）然後降落。\n\n"
+            "內部就是「導航到座標」+「降落」兩個積木 —— 沒有新的服務，\n"
+            "座標從 api/status 的 scene.home 來（＝節點的 local_origin_map）。\n\n"
+            "上面出口＝完成、下面出口＝失敗（導航失敗、降落失敗、"
+            "或不知道家在哪）。\n"
+            "逾時：導航 240 秒、降落 150 秒。")
+    return [
+        {"id": RTH_ID, "type": "subflow", "name": "返航", "info": info,
+         "category": ACT_CATEGORY, "color": "#C0DEED",
+         "in": [{"x": 40, "y": 100, "wires": [{"id": fetch}]}],
+         # 完成＝降落做完；失敗＝三個來源任一個
+         "out": [{"x": 700, "y": 60, "wires": [{"id": land, "port": 0}]},
+                 {"x": 700, "y": 180, "wires": [{"id": fetch, "port": 1},
+                                                {"id": go, "port": 1},
+                                                {"id": land, "port": 1}]}],
+         "outputLabels": ["完成", "失敗"], "env": []},
+        {"id": fetch, "type": "function", "z": RTH_ID, "name": "取回家座標",
+         "func": RTH_FETCH, "outputs": 2, "timeout": 0, "noerr": 0,
+         "initialize": "", "finalize": "", "libs": [],
+         "x": 180, "y": 100, "wires": [[go], []]},
+        {"id": go, "type": f"subflow:{act_id('a8')}", "z": RTH_ID, "name": "導航到生成點",
+         # MAP_X/MAP_Y 留 0：上一個節點送的 payload 會覆蓋掉它們。
+         # 留 0 而不是亂填，是為了萬一覆蓋失效時目標是個明確可辨識的值。
+         "env": [{"name": "MAP_X", "type": "num", "value": "0"},
+                 {"name": "MAP_Y", "type": "num", "value": "0"},
+                 {"name": "YAW", "type": "num", "value": "999"},
+                 {"name": "TIMEOUT", "type": "num", "value": "240"}],
+         "x": 390, "y": 100, "wires": [[land], []]},
+        {"id": land, "type": f"subflow:{act_id('a5')}", "z": RTH_ID, "name": "降落",
+         "env": [{"name": "TIMEOUT", "type": "num", "value": "150"}],
+         "x": 560, "y": 100, "wires": [[], []]},
+    ]
+
+
+def rth(i, y, done_target, fail_target, x=380, z=None):
+    """在畫布上放一個返航積木。"""
+    return {"id": nid(i), "type": f"subflow:{RTH_ID}", "z": z, "name": "返航",
+            "env": [], "x": x, "y": y,
+            "wires": [[done_target] if done_target else [],
+                      [fail_target] if fail_target else []]}
 
 
 def act(tag, i, y, done_target, fail_target, x=380, z=None, env=None):
@@ -941,6 +1032,12 @@ def dashboard_nodes():
         # 失敗時（等 45 秒找不到目標、位置估計失效…）訊息會進狀態區的「無人機狀態」。
         ui_button(575, g_mis, "🎯 追蹤目標", 2, nid(576), 740, x=300),
         act("a7", 576, 740, None, None, x=560, z=DASH),
+        # 返航（2026-10-27）。放在「任務」區而不是「飛行」區：飛行區是三個
+        # 原子動作（起飛／盤旋／降落），返航是組合出來的行為，和「開始任務」
+        # 同一類。結果不另外接 debug —— 失敗訊息會經由節點的任務狀態進到
+        # 狀態區的「無人機狀態」，和追蹤目標一樣。
+        ui_button(577, g_mis, "🏠 返航", 3, nid(578), 880, x=300),
+        rth(578, 880, None, None, x=560, z=DASH),
     ]
 
     # 模擬：和「系統」分頁一樣，按鈕 → systemctl
@@ -1198,7 +1295,7 @@ def main():
 
     # 積木的定義還是要產生（左側面板要用），只是不再附一個示範任務分頁 ——
     # 任務由使用者放在自己的分頁，更新時才不會被換掉。
-    nodes += wait_subflow() + action_subflows()
+    nodes += wait_subflow() + action_subflows() + return_home_subflow()
 
     nodes += dashboard_nodes()
 

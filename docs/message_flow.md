@@ -443,6 +443,51 @@ flowchart TB
 
 ---
 
+### 5.4 返航 —— 一個「沒有服務」的行為
+
+返航是目前唯一**不對應任何 ROS 服務**的動作積木。它就是：
+
+```
+導航到 scene.home  →  降落
+```
+
+兩個現成的積木串起來，`drone_api_node` 一行新程式都沒有（只多送一個
+`scene.home` 欄位，讓流程層知道家在哪）。
+
+```
+儀表板「🏠 返航」
+      │  widget-action
+      ▼
+返航積木（subflow）
+      ├─ 取回家座標     讀 global.drone_status.scene.home
+      │                 讀不到 → 失敗出口（不會退回 (0,0)）
+      ├─ 導航到座標     payload 的 map_x/map_y 覆蓋積木設定值
+      │                 → api/goto → Nav2 → 等 task done
+      └─ 降落           → api/land → 等 task done（landed && !armed）
+```
+
+**為什麼不做成 `api/return_home` 服務**
+
+這份專案的分工是「飛控端只提供原子動作，編排放在 Node-RED」。把串接搬進
+節點，等於把 low-code 層的價值搬走，而且會多一份和積木重複的等待邏輯
+（「服務回應 ≠ 動作完成」那一套）。返航正好是這個主張最好的示範 ——
+**新行為，零新服務**。
+
+**實測**（2026-10-27，倉庫場景）
+
+| | |
+|---|---|
+| 起點 | map(5.10, −9.09)，高度 5 m |
+| 家 | map(−14.0, −9.0)（＝生成點） |
+| 落點 | map(−13.74, −8.94)，誤差 **0.27 m** |
+| 結束狀態 | `landed=true`、`armed=false`、task `land` → `done` |
+
+⚠️ 逾時是寫死的（導航 240 秒、降落 150 秒），沒有開成積木參數 ——
+巢狀 subflow 要把 env 傳給內層實例得靠 Node-RED 的 env 參照，行為沒把握，
+填錯會變成逾時是 `NaN`（＝永遠不逾時）。要調就改
+`make_drone_basic.py` 的 `return_home_subflow()`。
+
+
 ## 6. 低程式碼層怎麼接上
 
 ```mermaid
@@ -492,6 +537,7 @@ sequenceDiagram
 | `target_map_x` / `target_map_y` / `target_age_s` | 地圖上的車（**YOLO 算的**，不是真值）。`age > target_lost_s` 就畫成灰的 |
 | `scene.boxes` | 地圖的場地幾何（貨架 + 外牆） |
 | `scene.target_home` | 車的**出生點**（設定值）。還沒偵測到車時畫成紅色空心圈 |
+| `scene.home` | 飛機的**生成／起飛點**（＝節點的 `local_origin_map`）。給「返航」積木用，流程層本來看不到節點參數。實機沒設就不送 |
 | `track.search_map` | 搜尋環線（map 座標），追蹤時才有 |
 | `task`、`patrol`、`track`、`nav` | 任務進度文字 |
 | `watchdog` | 看門狗有沒有跳 |

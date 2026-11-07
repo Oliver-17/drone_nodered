@@ -717,6 +717,16 @@ class DroneApi(Node):
         # 和 boxes 一樣每一拍都送 —— 理由同上（瀏覽器重連）。
         if self._target_home_map is not None:
             d["scene"]["target_home"] = list(self._target_home_map)
+        # 「家」在哪 —— PX4 的本地原點，也就是飛機的生成／起飛點（2026-10-27）。
+        # 給 Node-RED 的「返航」積木用：它要導航回這裡再降落，而流程層
+        # 本來看不到 local_origin_map（那是節點的參數）。
+        # ⚠️ 不是 map 的 (0,0) —— map 原點是倉庫正中央，生成點在 map(-14, -9)。
+        # ⚠️ 用既有的 _origin_map()，不要在這裡再解析一次 local_origin_map ——
+        #    座標轉換是這個專案踩過最多次的雷，所以它只能有一個出處。
+        # 實機沒設這個參數時就不送，前端／積木會說「不知道家在哪」而不是亂飛。
+        home = self._origin_map()
+        if home is not None:
+            d["scene"]["home"] = list(home)
         # 視覺目標現在在哪（2026-10-20）。⚠️ 這是 **YOLO 算出來的位置**，
         # 不是 Gazebo 的真值 —— 所以儀表板上的紅點和無人機的相對位置，
         # 直接就是追蹤誤差；跟丟的時候紅點會凍住。實機也有這個資訊。

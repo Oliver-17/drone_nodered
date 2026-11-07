@@ -25,6 +25,7 @@ run x "座標轉換（t_coords.py）"             python3 "$HERE/t_coords.py"
 run x "搜尋航點的保險（t_search_waypoint.py）" python3 "$HERE/t_search_waypoint.py"
 run x "流程合併保留使用者分頁（t_merge_keep.py）" python3 "$HERE/t_merge_keep.py"
 run x "儀表板地圖 widget（t_map_widget.js）" node "$HERE/t_map_widget.js"
+run x "返航積木（t_return_home.js）"          node "$HERE/t_return_home.js"
 run x "launch 參數求值順序（t_launch_order.sh）" bash "$HERE/t_launch_order.sh"
 
 printf '\n'
