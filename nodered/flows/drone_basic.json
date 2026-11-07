@@ -1,34 +1,5 @@
 [
   {
-    "id": "d0c0ffee00000000",
-    "type": "tab",
-    "label": "無人機控制（MAV1）",
-    "disabled": false,
-    "info": "起飛／盤旋／降落 + 狀態 + log。由 drone_nodered/nodered/make_drone_basic.py 產生。\n\ngenerated-by: drone_nodered"
-  },
-  {
-    "id": "d0c0ffeeffff0001",
-    "type": "tab",
-    "label": "系統",
-    "disabled": false,
-    "info": "用 systemd 開關模擬。由 make_drone_basic.py 產生。\n\ngenerated-by: drone_nodered"
-  },
-  {
-    "id": "d0c0ffeeffff0004",
-    "type": "tab",
-    "label": "儀表板",
-    "disabled": false,
-    "info": "產生儀表板畫面的流程。由 make_drone_basic.py 產生。\n\ngenerated-by: drone_nodered"
-  },
-  {
-    "id": "b8027bbad3b3e4af",
-    "type": "tab",
-    "label": "自訂任務",
-    "disabled": false,
-    "info": "",
-    "env": []
-  },
-  {
     "id": "f1a0c0de00000001",
     "type": "subflow",
     "name": "ROS2 呼叫服務",
@@ -83,13 +54,13 @@
       "version": "0.1.0"
     },
     "color": "#A6BBCF",
+    "icon": "font-awesome/fa-exchange",
     "inputLabels": [
       "服務參數"
     ],
     "outputLabels": [
       "服務回覆"
     ],
-    "icon": "font-awesome/fa-exchange",
     "status": {
       "x": 760,
       "y": 220,
@@ -102,1117 +73,10 @@
     }
   },
   {
-    "id": "f1a0c0de00000002",
-    "type": "subflow",
-    "name": "ROS2 訂閱",
-    "info": "訂閱一個 ROS 2 topic（透過 rosbridge），每收到一筆就輸出一次。\n\n### 設定\n- **TOPIC**：topic 名稱，例如 `/MAV1/api/status`\n- **TYPE**：訊息型別，例如 `std_msgs/msg/String`（可留空讓 rosbridge 自己判斷）\n- **THROTTLE_MS**：最快每幾毫秒送一筆，0 = 不限制\n- **ROSBRIDGE_URL**：預設 `ws://127.0.0.1:9090`\n\n### 輸出\n- `msg.payload` = ROS 訊息本身，例如 `std_msgs/String` 是 `{\"data\": \"...\"}`\n- `msg.topic` = topic 名稱\n\n### 狀態\n積木下方顯示「已訂閱」或「未連線」。\nrosbridge 重開後會自動重新連線、重新訂閱。\n\n\ngenerated-by: drone_nodered",
-    "category": "ROS 2",
-    "in": [],
-    "out": [
-      {
-        "x": 700,
-        "y": 80,
-        "wires": [
-          {
-            "id": "f1a0c0de00000204",
-            "port": 0
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "TOPIC",
-        "type": "str",
-        "value": ""
-      },
-      {
-        "name": "TYPE",
-        "type": "str",
-        "value": ""
-      },
-      {
-        "name": "THROTTLE_MS",
-        "type": "num",
-        "value": "0"
-      },
-      {
-        "name": "ROSBRIDGE_URL",
-        "type": "str",
-        "value": "ws://127.0.0.1:9090"
-      }
-    ],
-    "meta": {
-      "module": "nodered_ros2",
-      "version": "0.1.0"
-    },
-    "color": "#A6BBCF",
-    "outputLabels": [
-      "ROS 訊息"
-    ],
-    "icon": "font-awesome/fa-rss",
-    "status": {
-      "x": 700,
-      "y": 160,
-      "wires": [
-        {
-          "id": "f1a0c0de00000206",
-          "port": 1
-        }
-      ]
-    }
-  },
-  {
-    "id": "d0c0ffeefff10001",
-    "type": "subflow",
-    "name": "等待完成",
-    "info": "等上一個動作真的做完。左邊接動作、上面出口接下一步、下面出口接失敗處置。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 50,
-        "y": 60,
-        "wires": [
-          {
-            "id": "d0c0ffeefff10002"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 420,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeefff10002",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 420,
-        "y": 100,
-        "wires": [
-          {
-            "id": "d0c0ffeefff10002",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "120",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca10000",
-    "type": "subflow",
-    "name": "起飛",
-    "info": "送出「起飛」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 80,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca10001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 560,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca10003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 560,
-        "y": 120,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca10003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "ALTITUDE",
-        "type": "num",
-        "value": "1.5",
-        "ui": {
-          "label": {
-            "zh-TW": "高度（公尺，0.5～5）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "90",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca20000",
-    "type": "subflow",
-    "name": "調整高度",
-    "info": "送出「調整高度」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 80,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca20001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 560,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca20003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 560,
-        "y": 120,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca20003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "ALTITUDE",
-        "type": "num",
-        "value": "3.0",
-        "ui": {
-          "label": {
-            "zh-TW": "高度（公尺，0.5～5）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "60",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca30000",
-    "type": "subflow",
-    "name": "巡航",
-    "info": "送出「巡航」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 80,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca30001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 560,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca30003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 560,
-        "y": 120,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca30003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "POINTS_X",
-        "type": "json",
-        "value": "[5,5,0,0]",
-        "ui": {
-          "label": {
-            "zh-TW": "路線 x（公尺，北為正）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "json"
-            ]
-          }
-        }
-      },
-      {
-        "name": "POINTS_Y",
-        "type": "json",
-        "value": "[0,5,5,0]",
-        "ui": {
-          "label": {
-            "zh-TW": "路線 y（公尺，東為正）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "json"
-            ]
-          }
-        }
-      },
-      {
-        "name": "ALTITUDE",
-        "type": "num",
-        "value": "3.0",
-        "ui": {
-          "label": {
-            "zh-TW": "高度（公尺，0 = 維持現在）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "SPEED",
-        "type": "num",
-        "value": "2.0",
-        "ui": {
-          "label": {
-            "zh-TW": "速度（m/s，0.5～5）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "LOOPS",
-        "type": "num",
-        "value": "1",
-        "ui": {
-          "label": {
-            "zh-TW": "繞幾圈"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "300",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca70000",
-    "type": "subflow",
-    "name": "追蹤目標",
-    "info": "送出「追蹤目標」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 80,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca70001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 890,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca70003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 890,
-        "y": 120,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca70003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "DISTANCE",
-        "type": "num",
-        "value": "0",
-        "ui": {
-          "label": {
-            "zh-TW": "保持距離（公尺，0 = 自動算最佳值）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "ALTITUDE",
-        "type": "num",
-        "value": "0",
-        "ui": {
-          "label": {
-            "zh-TW": "高度（公尺，0 = 維持現在）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "DURATION",
-        "type": "num",
-        "value": "60",
-        "ui": {
-          "label": {
-            "zh-TW": "追多久（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "SEARCH_X",
-        "type": "json",
-        "value": "[5.6,5.6,0,0]",
-        "ui": {
-          "label": {
-            "zh-TW": "搜尋環線 x（map 座標，東為正）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "json"
-            ]
-          }
-        }
-      },
-      {
-        "name": "SEARCH_Y",
-        "type": "json",
-        "value": "[-9,9,9,-9]",
-        "ui": {
-          "label": {
-            "zh-TW": "搜尋環線 y（map 座標，北為正）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "json"
-            ]
-          }
-        }
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "300",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca80000",
-    "type": "subflow",
-    "name": "導航到座標",
-    "info": "送出「導航到座標」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 80,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca80001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 560,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca80003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 560,
-        "y": 120,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca80003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "MAP_X",
-        "type": "num",
-        "value": "0.0",
-        "ui": {
-          "label": {
-            "zh-TW": "map 座標 x（公尺，東為正）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "MAP_Y",
-        "type": "num",
-        "value": "0.0",
-        "ui": {
-          "label": {
-            "zh-TW": "map 座標 y（公尺，北為正）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "YAW",
-        "type": "num",
-        "value": "999",
-        "ui": {
-          "label": {
-            "zh-TW": "終點朝向（度，999 = 不在乎）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "240",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca40000",
-    "type": "subflow",
-    "name": "盤旋",
-    "info": "送出「盤旋」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 80,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca40001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 560,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca40003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 560,
-        "y": 120,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca40003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "30",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca50000",
-    "type": "subflow",
-    "name": "降落",
-    "info": "送出「降落」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 80,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca50001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 560,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca50003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 560,
-        "y": 120,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca50003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "150",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca60000",
-    "type": "subflow",
-    "name": "狀態查詢",
-    "info": "送出「狀態查詢」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 80,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca60001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 560,
-        "y": 40,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca60003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 560,
-        "y": 120,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca60003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "30",
-        "ui": {
-          "label": {
-            "zh-TW": "逾時（秒）"
-          },
-          "type": "input",
-          "opts": {
-            "types": [
-              "num"
-            ]
-          }
-        }
-      }
-    ],
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca90000",
-    "type": "subflow",
-    "name": "返航",
-    "info": "導航回飛機的生成點（起飛位置）然後降落。\n\n內部就是「導航到座標」+「降落」兩個積木 —— 沒有新的服務，\n座標從 api/status 的 scene.home 來（＝節點的 local_origin_map）。\n\n上面出口＝完成、下面出口＝失敗（導航失敗、降落失敗、或不知道家在哪）。\n逾時：導航 240 秒、降落 150 秒。",
-    "category": "無人機",
-    "in": [
-      {
-        "x": 40,
-        "y": 100,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca90001"
-          }
-        ]
-      }
-    ],
-    "out": [
-      {
-        "x": 770,
-        "y": 100,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca90003",
-            "port": 0
-          }
-        ]
-      },
-      {
-        "x": 770,
-        "y": 260,
-        "wires": [
-          {
-            "id": "d0c0ffeeaca90001",
-            "port": 1
-          },
-          {
-            "id": "d0c0ffeeaca90002",
-            "port": 1
-          },
-          {
-            "id": "d0c0ffeeaca90003",
-            "port": 1
-          }
-        ]
-      }
-    ],
-    "env": [],
-    "meta": {},
-    "color": "#C0DEED",
-    "outputLabels": [
-      "完成",
-      "失敗"
-    ]
-  },
-  {
     "id": "f1a0c0de00000101",
     "type": "websocket-client",
     "z": "f1a0c0de00000001",
     "path": "${ROSBRIDGE_URL}",
-    "tls": "",
-    "wholemsg": "false",
-    "hb": "0",
-    "subprotocol": "",
-    "headers": []
-  },
-  {
-    "id": "f1a0c0de00000201",
-    "type": "websocket-client",
-    "z": "f1a0c0de00000002",
-    "path": "${ROSBRIDGE_URL}",
-    "tls": "",
-    "wholemsg": "false",
-    "hb": "0",
-    "subprotocol": "",
-    "headers": []
-  },
-  {
-    "id": "d0c0ffeeui000001",
-    "type": "ui-base",
-    "name": "無人機控制台",
-    "path": "/dashboard",
-    "includeClientData": true,
-    "acceptsClientConfig": [
-      "ui-notification",
-      "ui-control"
-    ],
-    "showPathInSidebar": false,
-    "showReconnectNotification": true,
-    "notificationDisplayTime": "5",
-    "showDisconnectNotification": true,
-    "allowInstall": true
-  },
-  {
-    "id": "d0c0ffeeui000002",
-    "type": "ui-theme",
-    "name": "預設",
-    "colors": {
-      "surface": "#ffffff",
-      "primary": "#0094ce",
-      "bgPage": "#eeeeee",
-      "groupBg": "#ffffff",
-      "groupOutline": "#cccccc"
-    },
-    "sizes": {
-      "density": "default",
-      "pagePadding": "12px",
-      "groupGap": "12px",
-      "groupBorderRadius": "4px",
-      "widgetGap": "12px"
-    }
-  },
-  {
-    "id": "d0c0ffeeui000003",
-    "type": "ui-page",
-    "name": "控制",
-    "ui": "d0c0ffeeui000001",
-    "path": "/control",
-    "icon": "drone",
-    "layout": "grid",
-    "theme": "d0c0ffeeui000002",
-    "breakpoints": [
-      {
-        "name": "Default",
-        "px": 0,
-        "cols": 3
-      },
-      {
-        "name": "Tablet",
-        "px": 576,
-        "cols": 6
-      },
-      {
-        "name": "Small Desktop",
-        "px": 768,
-        "cols": 9
-      },
-      {
-        "name": "Desktop",
-        "px": 1024,
-        "cols": 12
-      }
-    ],
-    "order": 1,
-    "className": "",
-    "visible": true,
-    "disabled": false
-  },
-  {
-    "id": "d0c0ffeeuig00002",
-    "type": "ui-group",
-    "name": "狀態",
-    "page": "d0c0ffeeui000003",
-    "width": 12,
-    "height": 1,
-    "order": 1,
-    "showTitle": true,
-    "className": "",
-    "visible": true,
-    "disabled": false,
-    "groupType": "default"
-  },
-  {
-    "id": "d0c0ffeeuig00003",
-    "type": "ui-group",
-    "name": "飛行",
-    "page": "d0c0ffeeui000003",
-    "width": 6,
-    "height": 1,
-    "order": 2,
-    "showTitle": true,
-    "className": "",
-    "visible": true,
-    "disabled": false,
-    "groupType": "default"
-  },
-  {
-    "id": "d0c0ffeeuig00004",
-    "type": "ui-group",
-    "name": "任務",
-    "page": "d0c0ffeeui000003",
-    "width": 6,
-    "height": 1,
-    "order": 3,
-    "showTitle": true,
-    "className": "",
-    "visible": true,
-    "disabled": false,
-    "groupType": "default"
-  },
-  {
-    "id": "d0c0ffeeuig00005",
-    "type": "ui-group",
-    "name": "模擬",
-    "page": "d0c0ffeeui000003",
-    "width": 6,
-    "height": 1,
-    "order": 4,
-    "showTitle": true,
-    "className": "",
-    "visible": true,
-    "disabled": false,
-    "groupType": "default"
-  },
-  {
-    "id": "d0c0ffeeuig00001",
-    "type": "ui-group",
-    "name": "緊急",
-    "page": "d0c0ffeeui000003",
-    "width": 6,
-    "height": 1,
-    "order": 5,
-    "showTitle": true,
-    "className": "",
-    "visible": true,
-    "disabled": false,
-    "groupType": "default"
-  },
-  {
-    "id": "5514f2b07e6fdab8",
-    "type": "websocket-listener",
-    "path": "ws://localhost:9090",
-    "wholemsg": "false"
-  },
-  {
-    "id": "349d5b713ad90667",
-    "type": "websocket-listener",
-    "path": "ws://localhost:9090",
-    "wholemsg": "false"
-  },
-  {
-    "id": "9c4cbcde33e11688",
-    "type": "websocket-client",
-    "path": "ws://localhost:9090",
-    "tls": "",
-    "wholemsg": "false",
-    "hb": "0",
-    "subprotocol": "",
-    "headers": []
-  },
-  {
-    "id": "2bbc79bc6cdfadd6",
-    "type": "websocket-client",
-    "path": "ws://localhost:9090",
     "tls": "",
     "wholemsg": "false",
     "hb": "0",
@@ -1319,6 +183,78 @@
     ]
   },
   {
+    "id": "f1a0c0de00000002",
+    "type": "subflow",
+    "name": "ROS2 訂閱",
+    "info": "訂閱一個 ROS 2 topic（透過 rosbridge），每收到一筆就輸出一次。\n\n### 設定\n- **TOPIC**：topic 名稱，例如 `/MAV1/api/status`\n- **TYPE**：訊息型別，例如 `std_msgs/msg/String`（可留空讓 rosbridge 自己判斷）\n- **THROTTLE_MS**：最快每幾毫秒送一筆，0 = 不限制\n- **ROSBRIDGE_URL**：預設 `ws://127.0.0.1:9090`\n\n### 輸出\n- `msg.payload` = ROS 訊息本身，例如 `std_msgs/String` 是 `{\"data\": \"...\"}`\n- `msg.topic` = topic 名稱\n\n### 狀態\n積木下方顯示「已訂閱」或「未連線」。\nrosbridge 重開後會自動重新連線、重新訂閱。\n\n\ngenerated-by: drone_nodered",
+    "category": "ROS 2",
+    "in": [],
+    "out": [
+      {
+        "x": 700,
+        "y": 80,
+        "wires": [
+          {
+            "id": "f1a0c0de00000204",
+            "port": 0
+          }
+        ]
+      }
+    ],
+    "env": [
+      {
+        "name": "TOPIC",
+        "type": "str",
+        "value": ""
+      },
+      {
+        "name": "TYPE",
+        "type": "str",
+        "value": ""
+      },
+      {
+        "name": "THROTTLE_MS",
+        "type": "num",
+        "value": "0"
+      },
+      {
+        "name": "ROSBRIDGE_URL",
+        "type": "str",
+        "value": "ws://127.0.0.1:9090"
+      }
+    ],
+    "meta": {
+      "module": "nodered_ros2",
+      "version": "0.1.0"
+    },
+    "color": "#A6BBCF",
+    "icon": "font-awesome/fa-rss",
+    "outputLabels": [
+      "ROS 訊息"
+    ],
+    "status": {
+      "x": 700,
+      "y": 160,
+      "wires": [
+        {
+          "id": "f1a0c0de00000206",
+          "port": 1
+        }
+      ]
+    }
+  },
+  {
+    "id": "f1a0c0de00000201",
+    "type": "websocket-client",
+    "z": "f1a0c0de00000002",
+    "path": "${ROSBRIDGE_URL}",
+    "tls": "",
+    "wholemsg": "false",
+    "hb": "0",
+    "subprotocol": "",
+    "headers": []
+  },
+  {
     "id": "f1a0c0de00000203",
     "type": "websocket in",
     "z": "f1a0c0de00000002",
@@ -1400,606 +336,11 @@
     "wires": []
   },
   {
-    "id": "d0c0ffeefff10002",
-    "type": "function",
-    "z": "d0c0ffeefff10001",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 230,
-    "y": 70,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca10001",
-    "type": "function",
-    "z": "d0c0ffeeaca10000",
-    "name": "組參數",
-    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = { altitude: Number(env.get(\"ALTITUDE\")) };\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
-    "outputs": 1,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 160,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca10002"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca10002",
-    "type": "subflow:f1a0c0de00000001",
-    "z": "d0c0ffeeaca10000",
-    "name": "/MAV1/api/takeoff",
-    "env": [
-      {
-        "name": "SERVICE",
-        "type": "str",
-        "value": "/MAV1/api/takeoff"
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "10"
-      }
-    ],
-    "x": 320,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca10003"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca10003",
-    "type": "function",
-    "z": "d0c0ffeeaca10000",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 460,
-    "y": 80,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca20001",
-    "type": "function",
-    "z": "d0c0ffeeaca20000",
-    "name": "組參數",
-    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = { altitude: Number(env.get(\"ALTITUDE\")) };\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
-    "outputs": 1,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 160,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca20002"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca20002",
-    "type": "subflow:f1a0c0de00000001",
-    "z": "d0c0ffeeaca20000",
-    "name": "/MAV1/api/set_altitude",
-    "env": [
-      {
-        "name": "SERVICE",
-        "type": "str",
-        "value": "/MAV1/api/set_altitude"
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "10"
-      }
-    ],
-    "x": 320,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca20003"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca20003",
-    "type": "function",
-    "z": "d0c0ffeeaca20000",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 460,
-    "y": 80,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca30001",
-    "type": "function",
-    "z": "d0c0ffeeaca30000",
-    "name": "組參數",
-    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {\n    x: env.get(\"POINTS_X\"), y: env.get(\"POINTS_Y\"),\n    altitude: Number(env.get(\"ALTITUDE\")),\n    speed: Number(env.get(\"SPEED\")), loops: Number(env.get(\"LOOPS\")),\n};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
-    "outputs": 1,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 160,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca30002"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca30002",
-    "type": "subflow:f1a0c0de00000001",
-    "z": "d0c0ffeeaca30000",
-    "name": "/MAV1/api/patrol",
-    "env": [
-      {
-        "name": "SERVICE",
-        "type": "str",
-        "value": "/MAV1/api/patrol"
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "10"
-      }
-    ],
-    "x": 320,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca30003"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca30003",
-    "type": "function",
-    "z": "d0c0ffeeaca30000",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 460,
-    "y": 80,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca70001",
-    "type": "function",
-    "z": "d0c0ffeeaca70000",
-    "name": "組參數",
-    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {\n    distance: Number(env.get(\"DISTANCE\")),\n    altitude: Number(env.get(\"ALTITUDE\")),\n    duration: Number(env.get(\"DURATION\")),\n    search_x: env.get(\"SEARCH_X\"), search_y: env.get(\"SEARCH_Y\"),\n};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
-    "outputs": 1,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 160,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca70002"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca70002",
-    "type": "subflow:f1a0c0de00000001",
-    "z": "d0c0ffeeaca70000",
-    "name": "/MAV1/api/track",
-    "env": [
-      {
-        "name": "SERVICE",
-        "value": "/MAV1/api/track",
-        "type": "str"
-      }
-    ],
-    "x": 340,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca70003"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca70003",
-    "type": "function",
-    "z": "d0c0ffeeaca70000",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 570,
-    "y": 80,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca80001",
-    "type": "function",
-    "z": "d0c0ffeeaca80000",
-    "name": "組參數",
-    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {\n    map_x: Number(env.get(\"MAP_X\")),\n    map_y: Number(env.get(\"MAP_Y\")),\n    yaw: Number(env.get(\"YAW\")) * Math.PI / 180,\n    timeout: 0,   // 0 = 用節點預設（120 秒）\n};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
-    "outputs": 1,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 160,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca80002"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca80002",
-    "type": "subflow:f1a0c0de00000001",
-    "z": "d0c0ffeeaca80000",
-    "name": "/MAV1/api/goto",
-    "env": [
-      {
-        "name": "SERVICE",
-        "type": "str",
-        "value": "/MAV1/api/goto"
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "10"
-      }
-    ],
-    "x": 320,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca80003"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca80003",
-    "type": "function",
-    "z": "d0c0ffeeaca80000",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 460,
-    "y": 80,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca40001",
-    "type": "function",
-    "z": "d0c0ffeeaca40000",
-    "name": "組參數",
-    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
-    "outputs": 1,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 160,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca40002"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca40002",
-    "type": "subflow:f1a0c0de00000001",
-    "z": "d0c0ffeeaca40000",
-    "name": "/MAV1/api/hover",
-    "env": [
-      {
-        "name": "SERVICE",
-        "type": "str",
-        "value": "/MAV1/api/hover"
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "10"
-      }
-    ],
-    "x": 320,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca40003"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca40003",
-    "type": "function",
-    "z": "d0c0ffeeaca40000",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 460,
-    "y": 80,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca50001",
-    "type": "function",
-    "z": "d0c0ffeeaca50000",
-    "name": "組參數",
-    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
-    "outputs": 1,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 160,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca50002"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca50002",
-    "type": "subflow:f1a0c0de00000001",
-    "z": "d0c0ffeeaca50000",
-    "name": "/MAV1/api/land",
-    "env": [
-      {
-        "name": "SERVICE",
-        "type": "str",
-        "value": "/MAV1/api/land"
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "10"
-      }
-    ],
-    "x": 320,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca50003"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca50003",
-    "type": "function",
-    "z": "d0c0ffeeaca50000",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 460,
-    "y": 80,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca60001",
-    "type": "function",
-    "z": "d0c0ffeeaca60000",
-    "name": "組參數",
-    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
-    "outputs": 1,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 160,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca60002"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca60002",
-    "type": "subflow:f1a0c0de00000001",
-    "z": "d0c0ffeeaca60000",
-    "name": "/MAV1/api/state",
-    "env": [
-      {
-        "name": "SERVICE",
-        "type": "str",
-        "value": "/MAV1/api/state"
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "10"
-      }
-    ],
-    "x": 320,
-    "y": 80,
-    "wires": [
-      [
-        "d0c0ffeeaca60003"
-      ]
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca60003",
-    "type": "function",
-    "z": "d0c0ffeeaca60000",
-    "name": "等任務完成",
-    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 460,
-    "y": 80,
-    "wires": [
-      [],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca90001",
-    "type": "function",
-    "z": "d0c0ffeeaca90000",
-    "name": "取回家座標",
-    "func": "// 回家＝飛機的生成點（PX4 本地原點），由 drone_api_node 從 local_origin_map\n// 算出來放進狀態的 scene.home。流程層看不到節點參數，所以得這樣拿。\n//\n// ⚠️ 不要退回 (0,0) —— map 的原點是倉庫正中央，不是起飛點。\n//    倉庫的生成點在 map(-14, -9)，飛去 (0,0) 會降在走道正中間。\n//    拿不到就走失敗出口，寧可不動也不要降錯地方。\nconst s = global.get(\"drone_status\") || {};\nconst home = (s.scene || {}).home;\nif (!Array.isArray(home) || typeof home[0] !== \"number\"\n        || typeof home[1] !== \"number\") {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"不知道家在哪\" });\n    return [null, { payload: { 失敗: \"不知道家在哪：api/status 裡沒有 scene.home，\"\n        + \"表示 drone_api_node 的 local_origin_map 參數沒設定\" } }];\n}\n// 只送「導航到座標」本來就有的欄位 —— 它的組參數會用這兩個值覆蓋積木設定。\n// 整包 assign 會塞進服務不認得的欄位（2026-09-24 踩過）。\nnode.status({ fill: \"blue\", shape: \"dot\", text: `回家 (${home[0]}, ${home[1]})` });\nmsg.payload = { map_x: home[0], map_y: home[1] };\nreturn [msg, null];",
-    "outputs": 2,
-    "timeout": 0,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 180,
-    "y": 100,
-    "wires": [
-      [
-        "d0c0ffeeaca90002"
-      ],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca90002",
-    "type": "subflow:d0c0ffeeaca80000",
-    "z": "d0c0ffeeaca90000",
-    "name": "導航到生成點",
-    "env": [
-      {
-        "name": "MAP_X",
-        "type": "num",
-        "value": "0"
-      },
-      {
-        "name": "MAP_Y",
-        "type": "num",
-        "value": "0"
-      },
-      {
-        "name": "YAW",
-        "type": "num",
-        "value": "999"
-      },
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "240"
-      }
-    ],
-    "x": 390,
-    "y": 100,
-    "wires": [
-      [
-        "d0c0ffeeaca90003"
-      ],
-      []
-    ]
-  },
-  {
-    "id": "d0c0ffeeaca90003",
-    "type": "subflow:d0c0ffeeaca50000",
-    "z": "d0c0ffeeaca90000",
-    "name": "降落",
-    "env": [
-      {
-        "name": "TIMEOUT",
-        "type": "num",
-        "value": "150"
-      }
-    ],
-    "x": 570,
-    "y": 100,
-    "wires": [
-      [],
-      []
-    ]
+    "id": "d0c0ffee00000000",
+    "type": "tab",
+    "label": "無人機控制（MAV1）",
+    "disabled": false,
+    "info": "起飛／盤旋／降落 + 狀態 + log。由 drone_nodered/nodered/make_drone_basic.py 產生。\n\ngenerated-by: drone_nodered"
   },
   {
     "id": "d0c0ffee00000001",
@@ -2564,8 +905,8 @@
         "value": "std_msgs/msg/String"
       }
     ],
-    "x": 190,
-    "y": 860,
+    "x": 170,
+    "y": 670,
     "wires": [
       [
         "d0c0ffee000000c9"
@@ -2584,8 +925,8 @@
     "initialize": "",
     "finalize": "",
     "libs": [],
-    "x": 480,
-    "y": 860,
+    "x": 460,
+    "y": 670,
     "wires": [
       [
         "d0c0ffee000000ca"
@@ -2604,8 +945,8 @@
     "septopics": false,
     "property": "key",
     "topi": "topic",
-    "x": 720,
-    "y": 860,
+    "x": 700,
+    "y": 670,
     "wires": [
       [
         "d0c0ffee000000cb"
@@ -2625,8 +966,8 @@
     "targetType": "msg",
     "statusVal": "",
     "statusType": "auto",
-    "x": 1020,
-    "y": 860,
+    "x": 1000,
+    "y": 670,
     "wires": []
   },
   {
@@ -2690,6 +1031,13 @@
     "x": 860,
     "y": 760,
     "wires": []
+  },
+  {
+    "id": "d0c0ffeeffff0001",
+    "type": "tab",
+    "label": "系統",
+    "disabled": false,
+    "info": "用 systemd 開關模擬。由 make_drone_basic.py 產生。\n\ngenerated-by: drone_nodered"
   },
   {
     "id": "d0c0ffee00000064",
@@ -2989,6 +1337,1622 @@
     "wires": []
   },
   {
+    "id": "d0c0ffeefff10001",
+    "type": "subflow",
+    "name": "等待完成",
+    "info": "等上一個動作真的做完。左邊接動作、上面出口接下一步、下面出口接失敗處置。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 50,
+        "y": 60,
+        "wires": [
+          {
+            "id": "d0c0ffeefff10002"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 420,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeefff10002",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 420,
+        "y": 100,
+        "wires": [
+          {
+            "id": "d0c0ffeefff10002",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "120",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeefff10002",
+    "type": "function",
+    "z": "d0c0ffeefff10001",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 230,
+    "y": 70,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca10000",
+    "type": "subflow",
+    "name": "起飛",
+    "info": "送出「起飛」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 80,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca10001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 560,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca10003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 560,
+        "y": 120,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca10003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "ALTITUDE",
+        "type": "num",
+        "value": "1.5",
+        "ui": {
+          "label": {
+            "zh-TW": "高度（公尺，0.5～5）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "90",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca10001",
+    "type": "function",
+    "z": "d0c0ffeeaca10000",
+    "name": "組參數",
+    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = { altitude: Number(env.get(\"ALTITUDE\")) };\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca10002"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca10002",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffeeaca10000",
+    "name": "/MAV1/api/takeoff",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/takeoff"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 320,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca10003"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca10003",
+    "type": "function",
+    "z": "d0c0ffeeaca10000",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca20000",
+    "type": "subflow",
+    "name": "調整高度",
+    "info": "送出「調整高度」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 80,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca20001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 560,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca20003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 560,
+        "y": 120,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca20003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "ALTITUDE",
+        "type": "num",
+        "value": "3.0",
+        "ui": {
+          "label": {
+            "zh-TW": "高度（公尺，0.5～5）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "60",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca20001",
+    "type": "function",
+    "z": "d0c0ffeeaca20000",
+    "name": "組參數",
+    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = { altitude: Number(env.get(\"ALTITUDE\")) };\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca20002"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca20002",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffeeaca20000",
+    "name": "/MAV1/api/set_altitude",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/set_altitude"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 320,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca20003"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca20003",
+    "type": "function",
+    "z": "d0c0ffeeaca20000",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca30000",
+    "type": "subflow",
+    "name": "巡航",
+    "info": "送出「巡航」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 80,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca30001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 560,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca30003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 560,
+        "y": 120,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca30003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "POINTS_X",
+        "type": "json",
+        "value": "[5,5,0,0]",
+        "ui": {
+          "label": {
+            "zh-TW": "路線 x（公尺，北為正）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "json"
+            ]
+          }
+        }
+      },
+      {
+        "name": "POINTS_Y",
+        "type": "json",
+        "value": "[0,5,5,0]",
+        "ui": {
+          "label": {
+            "zh-TW": "路線 y（公尺，東為正）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "json"
+            ]
+          }
+        }
+      },
+      {
+        "name": "ALTITUDE",
+        "type": "num",
+        "value": "3.0",
+        "ui": {
+          "label": {
+            "zh-TW": "高度（公尺，0 = 維持現在）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "SPEED",
+        "type": "num",
+        "value": "2.0",
+        "ui": {
+          "label": {
+            "zh-TW": "速度（m/s，0.5～5）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "LOOPS",
+        "type": "num",
+        "value": "1",
+        "ui": {
+          "label": {
+            "zh-TW": "繞幾圈"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "300",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca30001",
+    "type": "function",
+    "z": "d0c0ffeeaca30000",
+    "name": "組參數",
+    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {\n    x: env.get(\"POINTS_X\"), y: env.get(\"POINTS_Y\"),\n    altitude: Number(env.get(\"ALTITUDE\")),\n    speed: Number(env.get(\"SPEED\")), loops: Number(env.get(\"LOOPS\")),\n};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca30002"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca30002",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffeeaca30000",
+    "name": "/MAV1/api/patrol",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/patrol"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 320,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca30003"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca30003",
+    "type": "function",
+    "z": "d0c0ffeeaca30000",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca70000",
+    "type": "subflow",
+    "name": "追蹤目標",
+    "info": "送出「追蹤目標」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 80,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca70001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 560,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca70003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 560,
+        "y": 120,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca70003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "DISTANCE",
+        "type": "num",
+        "value": "0",
+        "ui": {
+          "label": {
+            "zh-TW": "保持距離（公尺，0 = 自動算最佳值）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "ALTITUDE",
+        "type": "num",
+        "value": "0",
+        "ui": {
+          "label": {
+            "zh-TW": "高度（公尺，0 = 維持現在）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "DURATION",
+        "type": "num",
+        "value": "60",
+        "ui": {
+          "label": {
+            "zh-TW": "追多久（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "SEARCH_X",
+        "type": "json",
+        "value": "[5.6,5.6,0,0]",
+        "ui": {
+          "label": {
+            "zh-TW": "搜尋環線 x（map 座標，東為正）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "json"
+            ]
+          }
+        }
+      },
+      {
+        "name": "SEARCH_Y",
+        "type": "json",
+        "value": "[-9,9,9,-9]",
+        "ui": {
+          "label": {
+            "zh-TW": "搜尋環線 y（map 座標，北為正）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "json"
+            ]
+          }
+        }
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "300",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca70001",
+    "type": "function",
+    "z": "d0c0ffeeaca70000",
+    "name": "組參數",
+    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {\n    distance: Number(env.get(\"DISTANCE\")),\n    altitude: Number(env.get(\"ALTITUDE\")),\n    duration: Number(env.get(\"DURATION\")),\n    search_x: env.get(\"SEARCH_X\"), search_y: env.get(\"SEARCH_Y\"),\n};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca70002"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca70002",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffeeaca70000",
+    "name": "/MAV1/api/track",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/track"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 320,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca70003"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca70003",
+    "type": "function",
+    "z": "d0c0ffeeaca70000",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca80000",
+    "type": "subflow",
+    "name": "導航到座標",
+    "info": "送出「導航到座標」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 80,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca80001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 560,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca80003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 560,
+        "y": 120,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca80003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "MAP_X",
+        "type": "num",
+        "value": "0.0",
+        "ui": {
+          "label": {
+            "zh-TW": "map 座標 x（公尺，東為正）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "MAP_Y",
+        "type": "num",
+        "value": "0.0",
+        "ui": {
+          "label": {
+            "zh-TW": "map 座標 y（公尺，北為正）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "YAW",
+        "type": "num",
+        "value": "999",
+        "ui": {
+          "label": {
+            "zh-TW": "終點朝向（度，999 = 不在乎）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "240",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca80001",
+    "type": "function",
+    "z": "d0c0ffeeaca80000",
+    "name": "組參數",
+    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {\n    map_x: Number(env.get(\"MAP_X\")),\n    map_y: Number(env.get(\"MAP_Y\")),\n    yaw: Number(env.get(\"YAW\")) * Math.PI / 180,\n    timeout: 0,   // 0 = 用節點預設（120 秒）\n};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca80002"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca80002",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffeeaca80000",
+    "name": "/MAV1/api/goto",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/goto"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 320,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca80003"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca80003",
+    "type": "function",
+    "z": "d0c0ffeeaca80000",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca40000",
+    "type": "subflow",
+    "name": "盤旋",
+    "info": "送出「盤旋」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 80,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca40001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 560,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca40003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 560,
+        "y": 120,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca40003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "30",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca40001",
+    "type": "function",
+    "z": "d0c0ffeeaca40000",
+    "name": "組參數",
+    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca40002"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca40002",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffeeaca40000",
+    "name": "/MAV1/api/hover",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/hover"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 320,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca40003"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca40003",
+    "type": "function",
+    "z": "d0c0ffeeaca40000",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca50000",
+    "type": "subflow",
+    "name": "降落",
+    "info": "送出「降落」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 80,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca50001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 560,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca50003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 560,
+        "y": 120,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca50003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "150",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca50001",
+    "type": "function",
+    "z": "d0c0ffeeaca50000",
+    "name": "組參數",
+    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca50002"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca50002",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffeeaca50000",
+    "name": "/MAV1/api/land",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/land"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 320,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca50003"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca50003",
+    "type": "function",
+    "z": "d0c0ffeeaca50000",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca60000",
+    "type": "subflow",
+    "name": "狀態查詢",
+    "info": "送出「狀態查詢」並等它真的做完。\n\n上面出口＝完成、下面出口＝失敗（逾時或被拒絕）。\n被手動指令接手時兩個出口都不輸出，流程安靜停下。\n\ngenerated-by: drone_nodered",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 80,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca60001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 560,
+        "y": 40,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca60003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 560,
+        "y": 120,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca60003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": [
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "30",
+        "ui": {
+          "label": {
+            "zh-TW": "逾時（秒）"
+          },
+          "type": "input",
+          "opts": {
+            "types": [
+              "num"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca90000",
+    "type": "subflow",
+    "name": "返航",
+    "info": "導航回飛機的生成點（起飛位置）然後降落。\n\n內部就是「導航到座標」+「降落」兩個積木 —— 沒有新的服務，\n座標從 api/status 的 scene.home 來（＝節點的 local_origin_map）。\n\n上面出口＝完成、下面出口＝失敗（導航失敗、降落失敗、或不知道家在哪）。\n逾時：導航 240 秒、降落 150 秒。",
+    "category": "無人機",
+    "color": "#C0DEED",
+    "in": [
+      {
+        "x": 40,
+        "y": 100,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca90001"
+          }
+        ]
+      }
+    ],
+    "out": [
+      {
+        "x": 700,
+        "y": 60,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca90003",
+            "port": 0
+          }
+        ]
+      },
+      {
+        "x": 700,
+        "y": 180,
+        "wires": [
+          {
+            "id": "d0c0ffeeaca90001",
+            "port": 1
+          },
+          {
+            "id": "d0c0ffeeaca90002",
+            "port": 1
+          },
+          {
+            "id": "d0c0ffeeaca90003",
+            "port": 1
+          }
+        ]
+      }
+    ],
+    "outputLabels": [
+      "完成",
+      "失敗"
+    ],
+    "env": []
+  },
+  {
+    "id": "d0c0ffeeaca90001",
+    "type": "function",
+    "z": "d0c0ffeeaca90000",
+    "name": "取回家座標",
+    "func": "// 回家＝飛機的生成點（PX4 本地原點），由 drone_api_node 從 local_origin_map\n// 算出來放進狀態的 scene.home。流程層看不到節點參數，所以得這樣拿。\n//\n// ⚠️ 不要退回 (0,0) —— map 的原點是倉庫正中央，不是起飛點。\n//    倉庫的生成點在 map(-14, -9)，飛去 (0,0) 會降在走道正中間。\n//    拿不到就走失敗出口，寧可不動也不要降錯地方。\nconst s = global.get(\"drone_status\") || {};\nconst home = (s.scene || {}).home;\nif (!Array.isArray(home) || typeof home[0] !== \"number\"\n        || typeof home[1] !== \"number\") {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"不知道家在哪\" });\n    return [null, { payload: { 失敗: \"不知道家在哪：api/status 裡沒有 scene.home，\"\n        + \"表示 drone_api_node 的 local_origin_map 參數沒設定\" } }];\n}\n// 只送「導航到座標」本來就有的欄位 —— 它的組參數會用這兩個值覆蓋積木設定。\n// 整包 assign 會塞進服務不認得的欄位（2026-09-24 踩過）。\nnode.status({ fill: \"blue\", shape: \"dot\", text: `回家 (${home[0]}, ${home[1]})` });\nmsg.payload = { map_x: home[0], map_y: home[1] };\nreturn [msg, null];",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 180,
+    "y": 100,
+    "wires": [
+      [
+        "d0c0ffeeaca90002"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca90002",
+    "type": "subflow:d0c0ffeeaca80000",
+    "z": "d0c0ffeeaca90000",
+    "name": "導航到生成點",
+    "env": [
+      {
+        "name": "MAP_X",
+        "type": "num",
+        "value": "0"
+      },
+      {
+        "name": "MAP_Y",
+        "type": "num",
+        "value": "0"
+      },
+      {
+        "name": "YAW",
+        "type": "num",
+        "value": "999"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "240"
+      }
+    ],
+    "x": 390,
+    "y": 100,
+    "wires": [
+      [
+        "d0c0ffeeaca90003"
+      ],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca90003",
+    "type": "subflow:d0c0ffeeaca50000",
+    "z": "d0c0ffeeaca90000",
+    "name": "降落",
+    "env": [
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "150"
+      }
+    ],
+    "x": 560,
+    "y": 100,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca60001",
+    "type": "function",
+    "z": "d0c0ffeeaca60000",
+    "name": "組參數",
+    "func": "// 先記下傳進來的內容，下面那行會把 msg.payload 換掉\nconst incoming = (msg.payload && typeof msg.payload === 'object')\n    ? msg.payload : {};\n// 欄位值來自積木的設定（雙擊積木就能改）\nmsg.payload = {};\n// 傳進來的值可以覆蓋，但**只限這個動作本來就有的欄位**。\n// 不能整包 assign —— 上一個積木送來的是 {完成:…,說明:…}，\n// 整包塞進去會變成服務不認得的欄位，呼叫直接失敗（2026-09-24 踩到）。\nfor (const k of Object.keys(msg.payload)) {\n    if (k in incoming) { msg.payload[k] = incoming[k]; }\n}\n// 記下「送指令前」的任務編號，等待時才分得出新舊任務\nmsg._seq_before = ((global.get(\"drone_status\") || {}).task || {}).seq;\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 160,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca60002"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca60002",
+    "type": "subflow:f1a0c0de00000001",
+    "z": "d0c0ffeeaca60000",
+    "name": "/MAV1/api/state",
+    "env": [
+      {
+        "name": "SERVICE",
+        "type": "str",
+        "value": "/MAV1/api/state"
+      },
+      {
+        "name": "TIMEOUT",
+        "type": "num",
+        "value": "10"
+      }
+    ],
+    "x": 320,
+    "y": 80,
+    "wires": [
+      [
+        "d0c0ffeeaca60003"
+      ]
+    ]
+  },
+  {
+    "id": "d0c0ffeeaca60003",
+    "type": "function",
+    "z": "d0c0ffeeaca60000",
+    "name": "等任務完成",
+    "func": "// 等 drone_api_node 回報「上一個動作做完了」\n//\n// 為什麼不是等服務回應就好：服務是「下單」不是「送達」。按下起飛，服務 0.05 秒就回\n// 「已開始起飛」，但飛機要 20 秒才爬到。真正的完成寫在狀態的 task 欄位裡。\n//\n// 為什麼要看時間戳：狀態每 0.5 秒才發一次，剛進來時讀到的可能還是「上一個動作」的\n// 結果（已完成），那會讓這個積木立刻放行。所以只認「開始等之後才發布」的那一筆。\n// 服務當場就被拒絕（參數錯、飛機在地上…），不用等，直接走失敗\nif (msg.payload && msg.payload.success === false) {\n    node.status({ fill: \"red\", shape: \"ring\", text: \"被拒絕\" });\n    return { payload: { 失敗: msg.payload.message || \"服務呼叫被拒絕\" } };\n}\n\nconst t0 = Date.now();\nconst limit = Number(env.get(\"TIMEOUT\") || 120) * 1000;\n// 送指令前的任務編號。要等到「編號和它不一樣」才算是這次的任務 ——\n// 否則指令沒送成功時，會讀到上一個已完成的任務就放行（2026-09-24 踩到）。\nconst before = msg._seq_before;\nlet seq = null;\n\nconst timer = setInterval(() => {\n    const s = global.get(\"drone_status\");\n    if (!s || !s._t || s._t < t0) {                 // 還沒有新鮮的狀態\n        if (Date.now() - t0 > limit) { stop(); fail(\"等不到狀態更新\"); }\n        return;\n    }\n    const task = s.task || {};\n    if (seq === null) {\n        if (task.seq === before) { return; }        // 還是上一個任務，繼續等\n        seq = task.seq;                             // 鎖定這一次的任務\n    }\n    if (task.seq !== seq) {\n        // 有人按了別的按鈕 —— 這不是「失敗」，是使用者接手了。\n        // 什麼都不輸出，流程安靜停在這裡，不要自作主張去降落。\n        stop();\n        node.status({ fill: \"grey\", shape: \"ring\", text: \"已被手動指令接手\" });\n        node.warn(\"任務已被手動指令接手，流程停止\");\n        return;\n    }\n\n    if (task.state === \"done\") {\n        stop();\n        msg.payload = { 完成: task.name, 說明: task.message };\n        node.send([msg, null]);\n    } else if (task.state === \"failed\") {\n        stop();\n        fail(`${task.name}：${task.message}`);\n    } else if (Date.now() - t0 > limit) {\n        stop();\n        fail(`等待逾時（${limit / 1000} 秒）`);\n    } else {\n        node.status({ fill: \"blue\", shape: \"dot\", text: `等 ${task.name}…` });\n    }\n}, 200);\n\nfunction stop() { clearInterval(timer); }\nfunction fail(why) {\n    node.status({ fill: \"red\", shape: \"ring\", text: why });\n    msg.payload = { 失敗: why };\n    node.send([null, msg]);      // 第二個出口＝失敗，接你想要的處置\n}\n",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 460,
+    "y": 80,
+    "wires": [
+      [],
+      []
+    ]
+  },
+  {
+    "id": "d0c0ffeeui000001",
+    "type": "ui-base",
+    "name": "無人機控制台",
+    "path": "/dashboard",
+    "includeClientData": true,
+    "acceptsClientConfig": [
+      "ui-notification",
+      "ui-control"
+    ],
+    "showPathInSidebar": false,
+    "showReconnectNotification": true,
+    "notificationDisplayTime": "5",
+    "showDisconnectNotification": true,
+    "allowInstall": true
+  },
+  {
+    "id": "d0c0ffeeui000002",
+    "type": "ui-theme",
+    "name": "預設",
+    "colors": {
+      "surface": "#ffffff",
+      "primary": "#0094ce",
+      "bgPage": "#eeeeee",
+      "groupBg": "#ffffff",
+      "groupOutline": "#cccccc"
+    },
+    "sizes": {
+      "density": "default",
+      "pagePadding": "12px",
+      "groupGap": "12px",
+      "groupBorderRadius": "4px",
+      "widgetGap": "12px"
+    }
+  },
+  {
+    "id": "d0c0ffeeui000003",
+    "type": "ui-page",
+    "name": "控制",
+    "ui": "d0c0ffeeui000001",
+    "path": "/control",
+    "icon": "drone",
+    "layout": "grid",
+    "theme": "d0c0ffeeui000002",
+    "breakpoints": [
+      {
+        "name": "Default",
+        "px": 0,
+        "cols": 3
+      },
+      {
+        "name": "Tablet",
+        "px": 576,
+        "cols": 6
+      },
+      {
+        "name": "Small Desktop",
+        "px": 768,
+        "cols": 9
+      },
+      {
+        "name": "Desktop",
+        "px": 1024,
+        "cols": 12
+      }
+    ],
+    "order": 1,
+    "className": "",
+    "visible": true,
+    "disabled": false
+  },
+  {
+    "id": "d0c0ffeeuig00002",
+    "type": "ui-group",
+    "name": "狀態",
+    "page": "d0c0ffeeui000003",
+    "width": 12,
+    "height": 1,
+    "order": 1,
+    "showTitle": true,
+    "className": "",
+    "visible": true,
+    "disabled": false,
+    "groupType": "default"
+  },
+  {
+    "id": "d0c0ffeeuig00003",
+    "type": "ui-group",
+    "name": "飛行",
+    "page": "d0c0ffeeui000003",
+    "width": 6,
+    "height": 1,
+    "order": 2,
+    "showTitle": true,
+    "className": "",
+    "visible": true,
+    "disabled": false,
+    "groupType": "default"
+  },
+  {
+    "id": "d0c0ffeeuig00004",
+    "type": "ui-group",
+    "name": "任務",
+    "page": "d0c0ffeeui000003",
+    "width": 6,
+    "height": 1,
+    "order": 3,
+    "showTitle": true,
+    "className": "",
+    "visible": true,
+    "disabled": false,
+    "groupType": "default"
+  },
+  {
+    "id": "d0c0ffeeuig00005",
+    "type": "ui-group",
+    "name": "模擬",
+    "page": "d0c0ffeeui000003",
+    "width": 6,
+    "height": 1,
+    "order": 4,
+    "showTitle": true,
+    "className": "",
+    "visible": true,
+    "disabled": false,
+    "groupType": "default"
+  },
+  {
+    "id": "d0c0ffeeuig00001",
+    "type": "ui-group",
+    "name": "緊急",
+    "page": "d0c0ffeeui000003",
+    "width": 6,
+    "height": 1,
+    "order": 5,
+    "showTitle": true,
+    "className": "",
+    "visible": true,
+    "disabled": false,
+    "groupType": "default"
+  },
+  {
+    "id": "d0c0ffeeffff0004",
+    "type": "tab",
+    "label": "儀表板",
+    "disabled": false,
+    "info": "產生儀表板畫面的流程。由 make_drone_basic.py 產生。\n\ngenerated-by: drone_nodered"
+  },
+  {
     "id": "d0c0ffee000001f4",
     "type": "comment",
     "z": "d0c0ffeeffff0004",
@@ -3150,9 +3114,7 @@
     "className": "",
     "x": 700,
     "y": 220,
-    "wires": [
-      []
-    ]
+    "wires": []
   },
   {
     "id": "d0c0ffee0000020f",
@@ -3222,9 +3184,7 @@
     "className": "",
     "x": 700,
     "y": 280,
-    "wires": [
-      []
-    ]
+    "wires": []
   },
   {
     "id": "d0c0ffee0000020a",
@@ -3320,7 +3280,7 @@
     "iconInnerPosition": "inside",
     "spinner": true,
     "x": 180,
-    "y": 380,
+    "y": 420,
     "wires": [
       [
         "d0c0ffee00000213"
@@ -3340,7 +3300,7 @@
     "finalize": "",
     "libs": [],
     "x": 420,
-    "y": 380,
+    "y": 420,
     "wires": [
       []
     ]
@@ -3377,7 +3337,7 @@
     "pointerupPayload": "",
     "pointerupPayloadType": "str",
     "x": 300,
-    "y": 440,
+    "y": 480,
     "wires": [
       [
         "d0c0ffee0000021d"
@@ -3397,7 +3357,7 @@
     "finalize": "",
     "libs": [],
     "x": 520,
-    "y": 440,
+    "y": 480,
     "wires": [
       [
         "d0c0ffee0000021e"
@@ -3411,7 +3371,7 @@
     "name": "起飛",
     "env": [],
     "x": 720,
-    "y": 440,
+    "y": 480,
     "wires": [
       [],
       []
@@ -3449,7 +3409,7 @@
     "pointerupPayload": "",
     "pointerupPayloadType": "str",
     "x": 300,
-    "y": 500,
+    "y": 540,
     "wires": [
       [
         "d0c0ffee00000227"
@@ -3463,7 +3423,7 @@
     "name": "盤旋",
     "env": [],
     "x": 560,
-    "y": 500,
+    "y": 540,
     "wires": [
       [],
       []
@@ -3501,7 +3461,7 @@
     "pointerupPayload": "",
     "pointerupPayloadType": "str",
     "x": 300,
-    "y": 560,
+    "y": 600,
     "wires": [
       [
         "d0c0ffee00000231"
@@ -3515,7 +3475,7 @@
     "name": "降落",
     "env": [],
     "x": 560,
-    "y": 560,
+    "y": 600,
     "wires": [
       [],
       []
@@ -3553,7 +3513,7 @@
     "pointerupPayload": "",
     "pointerupPayloadType": "str",
     "x": 300,
-    "y": 640,
+    "y": 680,
     "wires": [
       [
         "d0c0ffeelink0001"
@@ -3568,7 +3528,7 @@
     "mode": "link",
     "links": [],
     "x": 545,
-    "y": 640,
+    "y": 680,
     "wires": []
   },
   {
@@ -3603,7 +3563,7 @@
     "pointerupPayload": "",
     "pointerupPayloadType": "str",
     "x": 300,
-    "y": 700,
+    "y": 740,
     "wires": [
       [
         "d0c0ffee00000240"
@@ -3617,7 +3577,7 @@
     "name": "追蹤目標",
     "env": [],
     "x": 560,
-    "y": 700,
+    "y": 740,
     "wires": [
       [],
       []
@@ -3655,7 +3615,7 @@
     "pointerupPayload": "",
     "pointerupPayloadType": "str",
     "x": 300,
-    "y": 840,
+    "y": 760,
     "wires": [
       [
         "d0c0ffee00000245"
@@ -3675,7 +3635,7 @@
     "oldrc": false,
     "name": "開模擬",
     "x": 520,
-    "y": 840,
+    "y": 760,
     "wires": [
       [
         "d0c0ffee0000024e"
@@ -3718,7 +3678,7 @@
     "pointerupPayload": "",
     "pointerupPayloadType": "str",
     "x": 300,
-    "y": 900,
+    "y": 820,
     "wires": [
       [
         "d0c0ffee0000024a"
@@ -3738,7 +3698,7 @@
     "oldrc": false,
     "name": "關模擬",
     "x": 520,
-    "y": 900,
+    "y": 820,
     "wires": [
       [
         "d0c0ffee0000024e"
@@ -3762,7 +3722,7 @@
     "finalize": "",
     "libs": [],
     "x": 900,
-    "y": 870,
+    "y": 790,
     "wires": [
       [
         "d0c0ffee0000024f"
@@ -3788,7 +3748,7 @@
     "wrapText": false,
     "className": "",
     "x": 1080,
-    "y": 870,
+    "y": 790,
     "wires": []
   },
   {
@@ -3822,8 +3782,8 @@
     "enablePointerup": false,
     "pointerupPayload": "",
     "pointerupPayloadType": "str",
-    "x": 310,
-    "y": 760,
+    "x": 300,
+    "y": 880,
     "wires": [
       [
         "d0c0ffee00000242"
@@ -3836,227 +3796,11 @@
     "z": "d0c0ffeeffff0004",
     "name": "返航",
     "env": [],
-    "x": 570,
-    "y": 760,
+    "x": 560,
+    "y": 880,
     "wires": [
       [],
       []
     ]
-  },
-  {
-    "id": "98cbe916e3310219",
-    "type": "inject",
-    "z": "b8027bbad3b3e4af",
-    "name": "▶ 開始任務",
-    "props": [
-      {
-        "p": "payload"
-      }
-    ],
-    "repeat": "",
-    "crontab": "",
-    "once": false,
-    "onceDelay": 0.1,
-    "topic": "",
-    "payload": "{}",
-    "payloadType": "json",
-    "x": 190,
-    "y": 120,
-    "wires": [
-      [
-        "3b8e4a7056e90adf"
-      ]
-    ]
-  },
-  {
-    "id": "7d92fb3215638c40",
-    "type": "debug",
-    "z": "b8027bbad3b3e4af",
-    "name": "失敗 → 已降落",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "payload",
-    "targetType": "msg",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 720,
-    "y": 220,
-    "wires": []
-  },
-  {
-    "id": "920d6ffb4cf2e859",
-    "type": "debug",
-    "z": "b8027bbad3b3e4af",
-    "name": "🏁 任務完成",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "payload",
-    "targetType": "msg",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1390,
-    "y": 120,
-    "wires": []
-  },
-  {
-    "id": "906f67ff2824b3cc",
-    "type": "debug",
-    "z": "b8027bbad3b3e4af",
-    "name": "失敗 → 已降落",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "payload",
-    "targetType": "msg",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1200,
-    "y": 220,
-    "wires": []
-  },
-  {
-    "id": "0257abe588d2efb8",
-    "type": "debug",
-    "z": "b8027bbad3b3e4af",
-    "name": "失敗 → 已降落",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "payload",
-    "targetType": "msg",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1440,
-    "y": 220,
-    "wires": []
-  },
-  {
-    "id": "72bff90bde88abef",
-    "type": "link in",
-    "z": "b8027bbad3b3e4af",
-    "name": "link in 1",
-    "links": [
-      "d0c0ffeelink0001"
-    ],
-    "x": 245,
-    "y": 220,
-    "wires": [
-      [
-        "3b8e4a7056e90adf"
-      ]
-    ]
-  },
-  {
-    "id": "3b8e4a7056e90adf",
-    "type": "subflow:d0c0ffeeaca10000",
-    "z": "b8027bbad3b3e4af",
-    "name": "",
-    "env": [
-      {
-        "name": "ALTITUDE",
-        "value": "5",
-        "type": "num"
-      }
-    ],
-    "x": 450,
-    "y": 120,
-    "wires": [
-      [
-        "1e63a2406530fb1f"
-      ],
-      [
-        "7d92fb3215638c40"
-      ]
-    ]
-  },
-  {
-    "id": "4255e1d6f56d3d5c",
-    "type": "subflow:d0c0ffeeaca50000",
-    "z": "b8027bbad3b3e4af",
-    "name": "",
-    "x": 1170,
-    "y": 120,
-    "wires": [
-      [
-        "920d6ffb4cf2e859"
-      ],
-      [
-        "0257abe588d2efb8"
-      ]
-    ]
-  },
-  {
-    "id": "8eb19106be68ed64",
-    "type": "subflow:d0c0ffeeaca70000",
-    "z": "b8027bbad3b3e4af",
-    "name": "",
-    "env": [
-      {
-        "name": "SEARCH_Y",
-        "value": "[-9, 9,9,-9]",
-        "type": "json"
-      }
-    ],
-    "x": 940,
-    "y": 120,
-    "wires": [
-      [
-        "4255e1d6f56d3d5c"
-      ],
-      [
-        "906f67ff2824b3cc"
-      ]
-    ]
-  },
-  {
-    "id": "1e63a2406530fb1f",
-    "type": "subflow:d0c0ffeeaca80000",
-    "z": "b8027bbad3b3e4af",
-    "name": "",
-    "env": [
-      {
-        "name": "MAP_X",
-        "value": "5.6",
-        "type": "num"
-      },
-      {
-        "name": "MAP_Y",
-        "value": "-9.0",
-        "type": "num"
-      }
-    ],
-    "x": 710,
-    "y": 120,
-    "wires": [
-      [
-        "8eb19106be68ed64"
-      ],
-      [
-        "dbc98b9a359b932b"
-      ]
-    ]
-  },
-  {
-    "id": "dbc98b9a359b932b",
-    "type": "debug",
-    "z": "b8027bbad3b3e4af",
-    "name": "失敗 → 已降落",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "payload",
-    "targetType": "msg",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 960,
-    "y": 220,
-    "wires": []
   }
 ]
