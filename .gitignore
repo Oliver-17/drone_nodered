@@ -15,3 +15,6 @@ log/
 *.swp
 *~
 .DS_Store
+
+# Node-RED 流程被覆寫前的自動備份（帶時間戳），不進版控。
+nodered/flows/*.bak.*
