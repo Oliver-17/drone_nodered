@@ -281,5 +281,15 @@
       <pose>0.0 -6.0 0.0 0 0 0</pose>
     </include>
 
+    <!-- ===== 地面車 Husky A200 =====
+         原廠模型（Fuel／CC0）＋ gz-sim 的 DiffDrive，模型在 husky_nodered 套件裡。
+         吃 /model/husky/cmd_vel、發 /model/husky/odom 與 tf，由 ros_gz_bridge 接到 ROS 2。
+         ⚠️ z 給 0.14275（模型原點離地），不是 0。 -->
+    <include>
+      <uri>model://husky</uri>
+      <name>husky</name>
+      <pose>-14.0 9.0 0.14275 0 0 0</pose>
+    </include>
+
   </world>
 </sdf>

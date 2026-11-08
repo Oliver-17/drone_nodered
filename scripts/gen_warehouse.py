@@ -344,7 +344,7 @@ def roof_model_xml():
 """
 
 
-def build_world_text(target="magenta", husky=False):
+def build_world_text(target="magenta", husky=True):
     x0, x1, y0, y1 = bounds()
     n_shelf = sum(1 for r in RECTS if r[6] == "shelf")
     header = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -474,7 +474,12 @@ def build_world_text(target="magenta", husky=False):
     </include>
 """
 
-    # 地面車：只有 --husky-world 那份世界檔才放，飛機那份維持原樣（H1 2026-11-07）
+    # 地面車：**直接放進唯一那份世界檔**（2026-11-07 改）。
+    # 原本想分成兩份（飛機一份、兩台一份），但 start_empty_sitl.sh 把世界檔名
+    # 綁死了三樣東西：檔案位置只找 drone_nodered/gz/worlds、PX4_GZ_WORLD 必須
+    # 等於 <world name>、還要有同名的 _geometry.yaml。多一份世界檔就要同步三處。
+    # 而且 Oliver 要的就是「打開模擬兩台都在」，所以一份就夠。
+    # 要只有飛機的場景：--no-husky（會產生沒有地面車的世界檔）。
     husky_xml = f"""
     <!-- ===== 地面車 Husky A200 =====
          原廠模型（Fuel／CC0）＋ gz-sim 的 DiffDrive，模型在 husky_nodered 套件裡。
@@ -821,11 +826,9 @@ def main():
     ap.add_argument("--target", choices=["magenta", "hatchback"], default="magenta",
                     help="目標車的外觀：magenta=洋紅方塊（顏色偵測用，預設）、"
                          "hatchback=真車外觀（YOLO 用）")
-    ap.add_argument("--husky-world", metavar="PATH",
-                    default=os.path.join(PKG_DIR, os.pardir, "husky_nodered",
-                                         "gz", "worlds", "warehouse_husky.sdf"),
-                    help="另外寫一份「同一個倉庫 + 地面車 Husky」的世界檔到這裡"
-                         "（預設寫進 husky_nodered 套件）。給 '' 可以不寫。")
+    ap.add_argument("--no-husky", action="store_true",
+                    help="產生「只有無人機」的世界檔（預設會含地面車 Husky）。"
+                         "⚠️ 用了之後 husky_nodered 那套就沒有車可以開。")
     args = ap.parse_args()
 
     x0, x1, y0, y1 = bounds()
@@ -874,20 +877,10 @@ def main():
     wpath = os.path.join(PKG_DIR, "gz", "worlds", f"{WORLD_NAME}.sdf")
     os.makedirs(os.path.dirname(wpath), exist_ok=True)
     with open(wpath, "w", encoding="utf-8") as f:
-        f.write(build_world_text(args.target))
-    print(f"\n寫出 {wpath}   （目標車：{args.target}）")
+        f.write(build_world_text(args.target, husky=not args.no_husky))
+    _h = "" if args.no_husky else "，含地面車 Husky"
+    print(f"\n寫出 {wpath}   （目標車：{args.target}{_h}）")
 
-    # 地面車那份：同一套幾何，多一台 Husky。
-    # ⚠️ 寫到另一個套件裡 —— 這是刻意的：幾何只能有一個來源（這支腳本），
-    #    但 Husky 的模型與 launch 屬於 husky_nodered。那份世界檔同樣「不要手改」。
-    if args.husky_world:
-        hpath = os.path.abspath(args.husky_world)
-        if os.path.isdir(os.path.dirname(hpath)):
-            with open(hpath, "w", encoding="utf-8") as f:
-                f.write(build_world_text(args.target, husky=True))
-            print(f"寫出 {hpath}   （同一個倉庫 + Husky）")
-        else:
-            print(f"跳過 {hpath}（目錄不存在 —— husky_nodered 還沒建？）")
 
     map_dir = os.path.join(PKG_DIR, "maps")
     os.makedirs(map_dir, exist_ok=True)

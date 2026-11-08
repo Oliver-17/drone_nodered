@@ -106,6 +106,14 @@ export PX4_GZ_WORLDS="$WORLDS_DIR"
 # 世界檔裡的 <uri>model://magenta_target</uri> 要靠這條路徑才找得到。
 # 接在後面而不是覆寫：PX4 自己的模型（x500、OakD-Lite）還是要能找到。
 export GZ_SIM_RESOURCE_PATH="$GZ_SIM_RESOURCE_PATH:$MODELS_DIR"
+# 地面車 Husky 的模型在另一個套件裡（2026-11-07）。倉庫世界檔預設會 include
+# model://husky，找不到的話 Gazebo 會**只少這一台、其他照常載入**，而且錯誤
+# 只出現在 gz 的 log 裡 —— 從飛機這邊完全看不出來。所以裝了就接上去。
+# 這是軟相依：husky_nodered 沒裝的話就跳過（用 --no-husky 產生的世界檔沒有車）。
+HUSKY_PREFIX="$(ros2 pkg prefix husky_nodered 2>/dev/null)"
+if [ -n "$HUSKY_PREFIX" ] && [ -d "$HUSKY_PREFIX/share/husky_nodered/gz/models" ]; then
+    export GZ_SIM_RESOURCE_PATH="$GZ_SIM_RESOURCE_PATH:$HUSKY_PREFIX/share/husky_nodered/gz/models"
+fi
 # ⚠️ 必須和世界檔裡的 <world name="…"> 一致（原因見 empty.sdf 檔頭）
 #    WORLD=empty_target → 空白世界 + 一個會移動的洋紅目標（視覺追蹤測試用）
 export PX4_GZ_WORLD="${WORLD:-empty}"
