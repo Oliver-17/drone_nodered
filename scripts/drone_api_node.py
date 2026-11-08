@@ -10,7 +10,7 @@
 #      ros2 service call /MAV1/api/set_altitude drone_nodered_interfaces/srv/SetAltitude "{altitude: 3.0}"
 #      ros2 service call /MAV1/api/patrol drone_nodered_interfaces/srv/Patrol \
 #          "{x: [10,10,0,0], y: [0,10,10,0], altitude: 3.0, speed: 2.0, loops: 1}"
-#      ros2 service call /MAV1/api/goto drone_nodered_interfaces/srv/GoTo \
+#      ros2 service call /MAV1/api/goto vehicle_nodered_interfaces/srv/GoTo \
 #          "{map_x: 0.0, map_y: 0.0, yaw: .nan, timeout: 0.0}"
 #      ros2 service call /MAV1/api/state   std_srvs/srv/Trigger    # 狀態查詢
 #      ros2 topic echo /MAV1/api/status
@@ -71,7 +71,9 @@ from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from drone_nodered_interfaces.srv import GoTo, Patrol, SetAltitude, Takeoff, Track
+from drone_nodered_interfaces.srv import Patrol, SetAltitude, Takeoff
+# GoTo / Track 和地面車共用 —— 2026-11-07 搬到 vehicle_nodered_interfaces
+from vehicle_nodered_interfaces.srv import GoTo, Track
 
 NAN = float("nan")
 

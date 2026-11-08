@@ -15,6 +15,8 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>drone_nodered_interfaces</exec_depend>
+  <!-- GoTo / Track：和地面車共用的格式（2026-11-07 搬出去） -->
+  <exec_depend>vehicle_nodered_interfaces</exec_depend>
   <!-- api/goto 用 NavigateToPose 這個 action -->
   <exec_depend>nav2_msgs</exec_depend>
   <!-- 流程要透過 rosbridge 跟 ROS 2 溝通，積木也來自這個套件 -->

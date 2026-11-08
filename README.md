@@ -417,3 +417,21 @@ ros2 launch drone_nodered nodered_all.launch.py rosbridge:=false drone_api:=fals
 | 停模擬後 Gazebo 還在 | `start_empty_sitl.sh` 預設把 PX4 丟背景就結束 | 用 `FOREGROUND=1`（服務已經這樣設） |
 | 剛開模擬，Node-RED 沒有狀態 | PX4 要約 11–15 秒才連上 agent | 等一下再看 |
 | 已開著的終端機找不到新的服務格式 | 環境變數只往下傳，不會回頭影響已開的終端 | 關掉重開，或 `source ~/ros2_ws/install/setup.bash` |
+
+## 搬動或刪除 .srv 之後一定要清乾淨重編（2026-11-07）
+
+從 rosidl 套件（`*_interfaces`）拿掉一個 `.srv` 之後，**增量編譯會留下壞掉的
+函式庫**：`build/` 和 `install/` 裡還有舊的產生碼，連出來的 typesupport
+仍然指向已經不存在的符號。症狀是
+
+```
+ImportError: ..._s__rosidl_typesupport_c...so: undefined symbol:
+  drone_nodered_interfaces__srv__track__request__convert_from_py
+```
+
+而且 **colcon build 會完全成功**，只有執行期才炸。解法：
+
+```bash
+rm -rf build/drone_nodered_interfaces install/drone_nodered_interfaces
+colcon build --packages-select drone_nodered_interfaces drone_nodered
+```

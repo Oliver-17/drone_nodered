@@ -25,7 +25,8 @@ from rclpy.qos import (QoSProfile, ReliabilityPolicy, HistoryPolicy,
                        DurabilityPolicy)
 from std_msgs.msg import String
 from px4_msgs.msg import VehicleLocalPosition
-from drone_nodered_interfaces.srv import Takeoff, GoTo
+from drone_nodered_interfaces.srv import Takeoff
+from vehicle_nodered_interfaces.srv import GoTo
 
 
 class Bench(Node):
