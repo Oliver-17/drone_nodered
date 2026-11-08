@@ -26,16 +26,31 @@ PKG_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 USER_DIR="${NODE_RED_USER_DIR:-$HOME/.node-red}"
 DRY_RUN=0
 
+EXTRA=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN=1; shift ;;
         --user-dir) USER_DIR="$2"; shift 2 ;;
+        *.json)
+            # 額外要一起裝的流程檔（例如地面車的 husky_basic.json）。
+            # 見下面 EXTRA 的註解：為什麼一定要和無人機那份「一起」裝。
+            [ -f "$1" ] || { echo "找不到流程檔：$1"; exit 1; }
+            EXTRA+=("$1"); shift ;;
         *) echo "不認得的參數：$1"; exit 1 ;;
     esac
 done
 
 # 流程檔：從原始碼目錄執行時在 <pkg>/nodered/flows；從安裝目錄執行時問 ROS 2 要路徑
 SRC="$PKG_SRC/nodered/flows/drone_basic.json"
+# 額外要一起裝的流程檔（例如地面車）。用法：
+#     install_flows.sh                                    只裝無人機
+#     install_flows.sh ~/ros2_ws/src/husky_nodered/nodered/flows/husky_basic.json
+#
+# ⚠️ 為什麼一定要「一起」裝，不能分兩次：
+#    merge_flows.py 是用 info 裡的 generated-by 標記判斷「哪些要換掉」。
+#    只拿地面車那份去合併的話，無人機的分頁會被當成本專案的舊東西整批刪掉。
+#    所以這裡把所有產生的流程併成一份再交給 merge_flows.py。
+# （在參數解析時填入，見上面的 *.json 那一條）
 if [ ! -f "$SRC" ]; then
     SRC="$(ros2 pkg prefix drone_nodered 2>/dev/null)/share/drone_nodered/nodered/flows/drone_basic.json"
 fi
@@ -45,6 +60,28 @@ if [ ! -f "$SRC" ]; then
 fi
 
 DST="$USER_DIR/flows.json"
+if [ ${#EXTRA[@]} -gt 0 ]; then
+    COMBINED="$(mktemp /tmp/flows_combined_XXXX.json)"
+    python3 - "$COMBINED" "$SRC" "${EXTRA[@]}" <<'PYCOMB'
+import json, sys
+out_path, *srcs = sys.argv[1:]
+seen, merged = {}, []
+for p in srcs:
+    for n in json.load(open(p, encoding="utf-8")):
+        if n["id"] in seen:
+            # nodered_ros2 的兩個通用積木是刻意共用同一份定義，重複是正常的。
+            # 其他 id 重複代表兩份流程撞號 —— 那會讓後載入的蓋掉前一個，必須擋下。
+            if json.dumps(n, sort_keys=True) != json.dumps(seen[n["id"]], sort_keys=True):
+                sys.exit(f"✗ id {n['id']} 在兩份流程裡內容不同（{p}）—— 撞號了")
+            continue
+        seen[n["id"]] = n
+        merged.append(n)
+print(f"  併了 {len(srcs)} 份流程，共 {len(merged)} 個節點")
+json.dump(merged, open(out_path, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+PYCOMB
+    SRC="$COMBINED"
+fi
+
 MERGE="$PKG_SRC/nodered/merge_flows.py"
 [ -f "$MERGE" ] || MERGE="$(ros2 pkg prefix drone_nodered 2>/dev/null)/share/drone_nodered/nodered/merge_flows.py"
 echo "來源： $SRC"

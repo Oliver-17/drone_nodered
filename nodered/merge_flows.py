@@ -24,7 +24,12 @@ import re
 import sys
 
 
-MARKER = "generated-by: drone_nodered"
+# ⚠️ 2026-11-07：地面車（husky_nodered）也會產生流程了，所以標記不能寫死
+#    成 drone_nodered。改成認得任何 <套件>_nodered 產生的分頁／積木。
+#    寫死的話，拿地面車的流程來合併會把無人機的分頁整批當成「別人的」
+#    而留下、同時又把地面車的當成新的塞進去 —— 反過來拿無人機的流程
+#    合併則會把地面車的刪掉。兩邊都要認得才對。
+MARKER_RE = re.compile(r"generated-by: \w+_nodered")
 
 
 def base_name(name):
@@ -44,13 +49,21 @@ def is_ours(n, ids, labels):
     """
     if n["id"] in ids:
         return True
-    if MARKER in (n.get("info") or ""):
+    if MARKER_RE.search(n.get("info") or ""):
         return True
     return base_name(n.get("label") or n.get("name")) in labels
 
 
 def merge(new_nodes, cur_nodes):
     ids = {n["id"] for n in new_nodes}
+    # 儀表板的分區（ui-group）既沒有 info 標記、也不是 tab/subflow，所以
+    # 上面那三種認法都認不出來 —— 從產生的流程裡拿掉一個分區之後，舊的那個
+    # 會被當成「使用者自己加的」而永遠留著（2026-11-08：刪掉「緊急」分區之後
+    # 儀表板上留下一個空殼）。
+    # 補一條：頁面（ui-page）是我們的，那一頁上的分區和元件就是我們的。
+    pages = {n["id"] for n in new_nodes if n["type"] == "ui-page"}
+    ours_ui = {n["id"] for n in cur_nodes
+               if n["type"] == "ui-group" and n.get("page") in pages}
     labels = {base_name(n.get("label") or n.get("name"))
               for n in new_nodes if n["type"] in ("tab", "subflow")}
 
@@ -60,7 +73,8 @@ def merge(new_nodes, cur_nodes):
 
     kept, dropped = [], 0
     for n in cur_nodes:
-        ours = n["id"] in ids or n.get("z") in containers
+        ours = (n["id"] in ids or n.get("z") in containers
+                or n["id"] in ours_ui or n.get("group") in ours_ui)
         if n["type"] in ("tab", "subflow"):
             ours = ours or is_ours(n, ids, labels)
         # 積木的「實例」（使用者從左側面板拖出來的那一個）要不要清掉，
