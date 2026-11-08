@@ -26,6 +26,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess,
                             IncludeLaunchDescription, OpaqueFunction)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
 
 
@@ -52,6 +53,19 @@ def _nodered(context, *args, **kwargs):
         # Node-RED 收到 SIGINT 會正常關閉（它自己的服務檔 nodered.service 也是用 SIGINT）
         sigterm_timeout="10",
     )]
+
+
+def _husky(context, *args, **kwargs):
+    """地面車的服務層。husky_nodered 沒裝就安靜跳過。"""
+    if LaunchConfiguration("husky_api").perform(context) == "false":
+        return []
+    try:
+        get_package_share_directory("husky_nodered")
+    except Exception:                                            # noqa: BLE001
+        return []                      # 沒裝這個套件 —— 只有無人機，正常
+    return [Node(package="husky_nodered", executable="husky_api_node.py",
+                 name="husky_api_node", output="log",
+                 parameters=[{"namespace": "husky"}])]
 
 
 def generate_launch_description():
@@ -109,6 +123,11 @@ def generate_launch_description():
         DeclareLaunchArgument("rosbridge", default_value="true"),
         DeclareLaunchArgument("drone_api", default_value="true"),
         DeclareLaunchArgument("nodered", default_value="true"),
+        # 地面車的服務層（2026-11-07）。和 drone_api 一樣屬於「底座」：
+        # 沒開模擬時也要在，否則儀表板的地面車分區整塊是空的 —— 地圖畫不出
+        # 倉庫、就緒燈沒有燈、按鈕按了沒反應，而且三個症狀都不會報錯。
+        # 軟相依：husky_nodered 沒裝就自動跳過（下面 _husky 會檢查）。
+        DeclareLaunchArgument("husky_api", default_value="true"),
 
         DeclareLaunchArgument("rosbridge_address", default_value="127.0.0.1",
                               description="127.0.0.1 只給本機；跨電腦（實機）要 0.0.0.0"),
@@ -145,5 +164,6 @@ def generate_launch_description():
             }.items(),
             condition=IfCondition(LaunchConfiguration("drone_api")),
         ),
+        OpaqueFunction(function=_husky),
         OpaqueFunction(function=_nodered),
     ])
