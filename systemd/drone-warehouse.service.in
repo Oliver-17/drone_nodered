@@ -53,6 +53,8 @@ After=graphical-session.target
 #
 # ⚠️ After 對 Type=simple 只保證「exec 出去了」，不保證「節點就緒」。
 #    這裡夠用是因為 warehouse_all.launch.py 自己把 Nav2 延後了 35 秒。
+#    ⚠️ 2026-11-07 改成 both_all 之後，地面車那套 Nav2 又晚 35 秒（t=70s），
+#       服務層在 t=85s —— 整個場景大約 95 秒才全部就緒，比以前久。
 #    以後若把那個延遲縮短，這個保證就會失效。
 Wants=drone-nodered.service
 After=drone-nodered.service
@@ -82,11 +84,23 @@ Type=simple
 #                     （貨架已經配合調高到 7 m，不然飛機會從上面過去）
 #   rviz:=false       要看 costmap 和規劃路徑再自己開；和視覺一起跑比較吃資源
 #   headless 不設     → Gazebo 開視窗（要看車繞圈）
-ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch drone_nodered warehouse_all.launch.py api:=false model:=x500_cam_down vision:=true altitude:=5.0 rviz:=false'
+# ⚠️ 2026-11-07：改成開 husky_nodered 的 both_all.launch.py —— 無人機和地面車
+#    **一定一起出現**（Oliver 要的就是這個，不要單獨開無人機的選項）。
+#    代價：這個服務相依 husky_nodered。只裝無人機的話這個服務起不來，
+#    要自己改回 drone_nodered 的 warehouse_all.launch.py。
+#
+#    api:=false —— 兩台的服務層（drone_api_node / husky_api_node）都由
+#    常駐的底座 drone-nodered.service 提供。這裡再開一次會變成兩個同名
+#    節點同時回應，而 ROS 2 只會印一行警告。
+ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch husky_nodered both_all.launch.py api:=false model:=x500_cam_down vision:=true altitude:=5.0 rviz:=false'
 
 # 45 秒：start_empty_sitl.sh 的收尾最多等 10 秒讓 Gazebo 好好關（釋放顯卡資源），
 # Nav2 的生命週期節點再給一些，其餘是裕度。
-TimeoutStopSec=45
+# ⚠️ 2026-11-07：45 → 90。改成 both_all 之後要收的東西多了一倍
+#    （多了地面車的 bridge、看門狗、靜態 TF、整套 Nav2），45 秒不夠，
+#    systemd 會以 'timeout' 把它砍掉 —— log 裡看到的是
+#    「Failed with result 'timeout'」，但其實只是關得慢。
+TimeoutStopSec=90
 
 [Install]
 WantedBy=default.target
