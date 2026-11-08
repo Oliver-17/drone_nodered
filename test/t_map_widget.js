@@ -204,9 +204,18 @@ check(/style="[^"]*width:\s*100%/.test(svgTag) && /style="[^"]*height:\s*\d/.tes
 //  ⑦ 把「拆成畫面欄位」接起來跑一次（後端 JSON → 地圖 payload 的那一段）
 // =============================================================================
 console.log('⑦ 後端的 api/status 一路跑到地圖 payload')
+const _g = new Map()
+const FAKE_GLOBAL = { get: k => _g.get(k), set: (k, v) => _g.set(k, v) }
+
 function split (status) {
-  const fn = new Function('msg', 'node', splitNode.func + '\nreturn null;')
-  return fn({ payload: { data: JSON.stringify(status) } }, { warn () {}, error () {} })
+  // ⚠️ 要餵 global：Node-RED 的 function 節點本來就有這個物件，而「拆成畫面
+  //    欄位」2026-11-07 起會用它合併兩台載具的地圖資料。少餵一個參數，
+  //    測試就會以 global.set is not a function 當掉 —— 那是測試替身不完整，
+  //    不是程式壞掉。
+  const fn = new Function('msg', 'node', 'global',
+    splitNode.func + '\nreturn null;')
+  return fn({ payload: { data: JSON.stringify(status) } },
+    { warn () {}, error () {} }, FAKE_GLOBAL)
 }
 const out = split({
   connected: true, armed: true, landed: false, mode: 'AUTO_LOITER',
@@ -228,6 +237,19 @@ check(mp.thx === 0 && mp.thy === -6, '車的出生點傳到地圖了',
   JSON.stringify({ thx: mp.thx, thy: mp.thy }))
 check(out[3].payload.includes('巡航找目標') && out[3].payload.includes('第 1 點'),
   '狀態文字顯示在找目標', out[3].payload)
+
+// 🔴 2026-11-07：沒連上 PX4 的那條提早 return 也要送「合併後」的地圖資料。
+//    只送場地的話，地面車的位置會被 widget 清掉，而地面車那邊每 0.2 秒又送
+//    一次含位置的版本 → 地圖上的車子以 5 Hz 閃爍（「還沒開模擬地圖一直跳」）。
+_g.set('map_ugv', { ux: -14, uy: 9, uh: 90 })
+const off = split({ connected: false, scene: { boxes: BOXES } })
+const offMap = off[5].payload
+check(offMap.ux === -14 && offMap.uy === 9,
+  '沒連上 PX4 時，地圖資料仍然帶著地面車的位置（不然會閃爍）',
+  JSON.stringify({ ux: offMap.ux, uy: offMap.uy }))
+check(Array.isArray(offMap.boxes) && offMap.boxes.length === 8,
+  '沒連上 PX4 時場地還是畫得出來')
+_g.delete('map_ugv')
 
 // 跟隨階段：search_index 是 null，環線還是要畫（看得出待會跟丟要回哪找）
 const mp2 = split({
