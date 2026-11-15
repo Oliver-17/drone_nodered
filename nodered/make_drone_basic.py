@@ -786,7 +786,7 @@ if (!r) {
     if (!r.position) 缺.push("位置估計");
     if (!r.nav2) 缺.push("Nav2");
     if (!r.bridge) 缺.push("cmd_vel 橋");
-    系統狀態 = "⏳ 未就緒（等 " + 缺.join("、") + "）";
+    系統狀態 = "❌ 未就緒（等 " + 缺.join("、") + "）";
 } else {
     系統狀態 = "✅ 就緒";
 }
