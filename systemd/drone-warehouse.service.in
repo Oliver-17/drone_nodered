@@ -79,7 +79,14 @@ Type=simple
 # 參數的理由：
 #   api:=false        見檔頭（底座已經有一個 drone_api_node）
 #   model:=x500_cam_down  腹部支架相機、俯角 67°、無盲區 —— 視覺追蹤要用這支
-#   vision:=true      色彩偵測 → 目標世界座標
+#   vision:=true      **無人機**的偵測鏈 → 目標世界座標
+#   husky_vision:=true **地面車**的前視相機與偵測鏈（2026-11-14 加）。
+#                     ⚠️ 這兩個是不同的參數，不要以為 vision:=true 兩台都開了。
+#                     沒有它的話 /husky/detections 和 /husky/api/target 整個
+#                     不存在，地面車的 api/track 叫得動、也會回成功，但永遠
+#                     看不到目標 —— 一直停在「搜尋」，而且沒有任何錯誤訊息。
+#                     代價是多一個影像橋接和第二個 YOLO。要省資源就拿掉它，
+#                     追蹤改用終端機單獨跑 husky_all.launch.py vision:=true 測。
 #   altitude:=5.0     bridge 的巡航高度。3 m 時追蹤畫面晃得明顯，5 m 好很多
 #                     （貨架已經配合調高到 7 m，不然飛機會從上面過去）
 #   rviz:=false       要看 costmap 和規劃路徑再自己開；和視覺一起跑比較吃資源
@@ -92,7 +99,7 @@ Type=simple
 #    api:=false —— 兩台的服務層（drone_api_node / husky_api_node）都由
 #    常駐的底座 drone-nodered.service 提供。這裡再開一次會變成兩個同名
 #    節點同時回應，而 ROS 2 只會印一行警告。
-ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch husky_nodered both_all.launch.py api:=false model:=x500_cam_down vision:=true altitude:=5.0 rviz:=false'
+ExecStart=/bin/bash -c 'source @ROS_SETUP@ && source @WORKSPACE@/install/setup.bash && exec ros2 launch husky_nodered both_all.launch.py api:=false model:=x500_cam_down vision:=true husky_vision:=true altitude:=5.0 rviz:=false'
 
 # 45 秒：start_empty_sitl.sh 的收尾最多等 10 秒讓 Gazebo 好好關（釋放顯卡資源），
 # Nav2 的生命週期節點再給一些，其餘是裕度。
