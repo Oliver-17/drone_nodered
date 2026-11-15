@@ -573,8 +573,8 @@ def action_subflows():
             {"id": sid, "type": "subflow", "name": label, "info": info,
              "category": ACT_CATEGORY, "color": "#C0DEED",
              "in": [{"x": 40, "y": 80, "wires": [{"id": fn_in}]}],
-             "out": [{"x": 560, "y": 40, "wires": [{"id": fn_wait, "port": 0}]},
-                     {"x": 560, "y": 120, "wires": [{"id": fn_wait, "port": 1}]}],
+             "out": [{"x": 720, "y": 40, "wires": [{"id": fn_wait, "port": 0}]},
+                     {"x": 720, "y": 120, "wires": [{"id": fn_wait, "port": 1}]}],
              "outputLabels": ["完成", "失敗"], "env": env_def},
             {"id": fn_in, "type": "function", "z": sid, "name": "組參數",
              # 先用積木設定的值組出參數，再讓「傳進來的 payload」覆蓋。
@@ -598,10 +598,10 @@ def action_subflows():
             {"id": inst, "type": f"subflow:{CALL}", "z": sid, "name": f"/{NS}/api/{action}",
              "env": [{"name": "SERVICE", "type": "str", "value": f"/{NS}/api/{action}"},
                      {"name": "TIMEOUT", "type": "num", "value": "10"}],
-             "x": 320, "y": 80, "wires": [[fn_wait]]},
+             "x": 380, "y": 80, "wires": [[fn_wait]]},
             {"id": fn_wait, "type": "function", "z": sid, "name": "等任務完成",
              "func": WAIT_CODE, "outputs": 2, "timeout": 0, "noerr": 0,
-             "initialize": "", "finalize": "", "libs": [], "x": 460, "y": 80,
+             "initialize": "", "finalize": "", "libs": [], "x": 600, "y": 80,
              "wires": [[], []]},
         ]
     return out
