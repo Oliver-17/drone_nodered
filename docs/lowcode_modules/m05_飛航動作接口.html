@@ -1,0 +1,100 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><!-- 由 render.py 產生，不要手改 --></head><body style="margin:0;background:#fff"><svg xmlns="http://www.w3.org/2000/svg" width="1600" height="918" font-family="Noto Sans CJK TC"><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3e4c59"/></marker><marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d64545"/></marker><marker id="o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d68910"/></marker><marker id="p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8e44ad"/></marker></defs><rect width="1600" height="918" fill="#fff"/><text x="800.0" y="58" text-anchor="middle" font-size="34" font-weight="700" fill="#1f2933">Low-Code 任務流程　飛航動作接口</text>
+<rect x="49.5" y="100" width="355" height="664" rx="16" fill="#fff" stroke="#2e6da4" stroke-width="3"/>
+<path d="M 49.5 116 a 16 16 0 0 1 16 -16 h 323 a 16 16 0 0 1 16 16 v 114 h -355 z" fill="#eaf2fa"/>
+<rect x="183.0" y="118" width="88" height="30" rx="15" fill="#2e6da4"/>
+<text x="227.0" y="139" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">無人機</text>
+<text x="227.0" y="188" text-anchor="middle" font-size="28" font-weight="700" fill="#1f4e79">起飛</text>
+<text x="227.0" y="216" text-anchor="middle" font-size="17" font-weight="400" fill="#1f4e79">Takeoff</text>
+<text x="73.5" y="262" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">動作用途</text>
+<text x="73.5" y="290" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">解鎖並爬升到指定高度</text>
+<line x1="69.5" y1="340" x2="384.5" y2="340" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="73.5" y="366" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">輸入參數</text>
+<text x="73.5" y="394" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">ALTITUDE 高度</text>
+<text x="73.5" y="422" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">預設 1.5 m，限 0.5～5 m</text>
+<line x1="69.5" y1="444" x2="384.5" y2="444" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="73.5" y="470" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">輸出結果</text>
+<text x="73.5" y="498" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">成功 → 完成出口</text>
+<text x="73.5" y="526" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">被拒絕／逾時 90 秒 → 失敗出口</text>
+<line x1="69.5" y1="548" x2="384.5" y2="548" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="73.5" y="574" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">流程觸發條件</text>
+<text x="73.5" y="602" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">飛機在地面、PX4 已連線</text>
+<line x1="69.5" y1="652" x2="384.5" y2="652" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="73.5" y="678" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">與飛控系統介接</text>
+<text x="73.5" y="706" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">送 PX4 指令：解鎖＋起飛</text>
+<text x="73.5" y="734" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">（PX4 內建起飛模式）</text>
+<rect x="431.5" y="100" width="355" height="664" rx="16" fill="#fff" stroke="#2e6da4" stroke-width="3"/>
+<path d="M 431.5 116 a 16 16 0 0 1 16 -16 h 323 a 16 16 0 0 1 16 16 v 114 h -355 z" fill="#eaf2fa"/>
+<rect x="565.0" y="118" width="88" height="30" rx="15" fill="#2e6da4"/>
+<text x="609.0" y="139" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">無人機</text>
+<text x="609.0" y="188" text-anchor="middle" font-size="28" font-weight="700" fill="#1f4e79">導航到座標</text>
+<text x="609.0" y="216" text-anchor="middle" font-size="17" font-weight="400" fill="#1f4e79">Waypoint Navigation</text>
+<text x="455.5" y="262" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">動作用途</text>
+<text x="455.5" y="290" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">飛到地圖上的指定點，</text>
+<text x="455.5" y="318" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">自動繞開貨架</text>
+<line x1="451.5" y1="340" x2="766.5" y2="340" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="455.5" y="366" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">輸入參數</text>
+<text x="455.5" y="394" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">MAP_X、MAP_Y 座標</text>
+<text x="455.5" y="422" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">YAW 機頭方向（可不指定）</text>
+<line x1="451.5" y1="444" x2="766.5" y2="444" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="455.5" y="470" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">輸出結果</text>
+<text x="455.5" y="498" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">抵達 → 完成出口</text>
+<text x="455.5" y="526" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">導航失敗／逾時 240 秒 → 失敗出口</text>
+<line x1="451.5" y1="548" x2="766.5" y2="548" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="455.5" y="574" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">流程觸發條件</text>
+<text x="455.5" y="602" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">已在空中、Nav2 就緒</text>
+<line x1="451.5" y1="652" x2="766.5" y2="652" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="455.5" y="678" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">與飛控系統介接</text>
+<text x="455.5" y="706" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">Nav2 規劃路徑 → 速度指令</text>
+<text x="455.5" y="734" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">→ 轉成 PX4 offboard 設定點</text>
+<rect x="813.5" y="100" width="355" height="664" rx="16" fill="#fff" stroke="#2e6da4" stroke-width="3"/>
+<path d="M 813.5 116 a 16 16 0 0 1 16 -16 h 323 a 16 16 0 0 1 16 16 v 114 h -355 z" fill="#eaf2fa"/>
+<rect x="947.0" y="118" width="88" height="30" rx="15" fill="#2e6da4"/>
+<text x="991.0" y="139" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">無人機</text>
+<text x="991.0" y="188" text-anchor="middle" font-size="28" font-weight="700" fill="#1f4e79">追蹤目標</text>
+<text x="991.0" y="216" text-anchor="middle" font-size="17" font-weight="400" fill="#1f4e79">Target Tracking</text>
+<text x="837.5" y="262" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">動作用途</text>
+<text x="837.5" y="290" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">找到目標車，保持距離</text>
+<text x="837.5" y="318" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">跟著飛</text>
+<line x1="833.5" y1="340" x2="1148.5" y2="340" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="837.5" y="366" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">輸入參數</text>
+<text x="837.5" y="394" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">DISTANCE 距離（0＝自動）</text>
+<text x="837.5" y="422" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">DURATION 時間、搜尋路線</text>
+<line x1="833.5" y1="444" x2="1148.5" y2="444" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="837.5" y="470" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">輸出結果</text>
+<text x="837.5" y="498" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">追滿時間 → 完成出口</text>
+<text x="837.5" y="526" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">被拒絕／逾時 → 失敗出口</text>
+<line x1="833.5" y1="548" x2="1148.5" y2="548" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="837.5" y="574" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">流程觸發條件</text>
+<text x="837.5" y="602" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">已在空中、YOLO 偵測開著</text>
+<line x1="833.5" y1="652" x2="1148.5" y2="652" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="837.5" y="678" text-anchor="start" font-size="16" font-weight="700" fill="#2e6da4">與飛控系統介接</text>
+<text x="837.5" y="706" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">搜尋：PX4 定點飛行指令</text>
+<text x="837.5" y="734" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">跟隨：速度指令 → offboard</text>
+<rect x="1195.5" y="100" width="355" height="664" rx="16" fill="#fff" stroke="#b7782c" stroke-width="3"/>
+<path d="M 1195.5 116 a 16 16 0 0 1 16 -16 h 323 a 16 16 0 0 1 16 16 v 114 h -355 z" fill="#f8eedf"/>
+<rect x="1329.0" y="118" width="88" height="30" rx="15" fill="#b7782c"/>
+<text x="1373.0" y="139" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">地面車</text>
+<text x="1373.0" y="188" text-anchor="middle" font-size="28" font-weight="700" fill="#8a5a1e">車：返航</text>
+<text x="1373.0" y="216" text-anchor="middle" font-size="17" font-weight="400" fill="#8a5a1e">Return to Home</text>
+<text x="1219.5" y="262" text-anchor="start" font-size="16" font-weight="700" fill="#b7782c">動作用途</text>
+<text x="1219.5" y="290" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">把車開回出發點</text>
+<line x1="1215.5" y1="340" x2="1530.5" y2="340" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="1219.5" y="366" text-anchor="start" font-size="16" font-weight="700" fill="#b7782c">輸入參數</text>
+<text x="1219.5" y="394" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">不用填</text>
+<text x="1219.5" y="422" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">（家的位置自動從狀態讀取）</text>
+<line x1="1215.5" y1="444" x2="1530.5" y2="444" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="1219.5" y="470" text-anchor="start" font-size="16" font-weight="700" fill="#b7782c">輸出結果</text>
+<text x="1219.5" y="498" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">到家 → 完成出口</text>
+<text x="1219.5" y="526" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">不知道家在哪／導航失敗 → 失敗出口</text>
+<line x1="1215.5" y1="548" x2="1530.5" y2="548" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="1219.5" y="574" text-anchor="start" font-size="16" font-weight="700" fill="#b7782c">流程觸發條件</text>
+<text x="1219.5" y="602" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">地面車就緒</text>
+<text x="1219.5" y="630" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">（Nav2、里程計正常）</text>
+<line x1="1215.5" y1="652" x2="1530.5" y2="652" stroke="#e4e7eb" stroke-width="1.5"/>
+<text x="1219.5" y="678" text-anchor="start" font-size="16" font-weight="700" fill="#b7782c">與飛控系統介接</text>
+<text x="1219.5" y="706" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">沒有飛控：Nav2 → 速度指令</text>
+<text x="1219.5" y="734" text-anchor="start" font-size="18" font-weight="400" fill="#1f2933">→ 看門狗 → 車輪驅動</text>
+<rect x="49.5" y="792" width="1501" height="96" rx="12" fill="#f5f7fa" stroke="#cbd2d9" stroke-width="1.5"/>
+<text x="73.5" y="828" text-anchor="start" font-size="19" font-weight="700" fill="#3e4c59">共同規格</text>
+<text x="179.5" y="828" text-anchor="start" font-size="18" font-weight="400" fill="#323f4b">每個動作都是一塊積木：左邊輸入觸發，送出服務後等它「真的做完」才輸出。</text>
+<text x="179.5" y="864" text-anchor="start" font-size="18" font-weight="400" fill="#323f4b">上出口＝完成（接下一塊）　·　下出口＝失敗（接降落／停止）　·　被手動按鈕接手時兩個出口都不輸出，流程安靜停下。</text></svg></body></html>

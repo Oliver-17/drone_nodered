@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<!-- 四大模組（分開說明）。改完跑同資料夾的 render.sh 重新產生 PNG。
+     配色沿用 husky_nodered/docs/report 的圖（綠／黃／紅／灰框），放在同一份報告裡才一致。 -->
+<style>
+  body { margin: 0; background: #fff; font-family: "Noto Sans CJK TC", sans-serif; color: #1f2933; }
+  .page { width: 1600px; padding: 28px 32px 24px; box-sizing: border-box; }
+  h1 { text-align: center; font-size: 30px; margin: 0 0 6px; font-weight: 700; }
+  .sub { text-align: center; font-size: 16px; color: #52606d; margin-bottom: 22px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .card { border: 2.5px solid; border-radius: 10px; overflow: hidden; }
+  .hd { padding: 10px 16px; font-size: 22px; font-weight: 700; display: flex; align-items: baseline; gap: 12px; }
+  .hd .no { font-size: 26px; }
+  .hd .en { font-size: 14px; font-weight: 400; opacity: .75; }
+  table { width: 100%; border-collapse: collapse; font-size: 15.5px; line-height: 1.5; }
+  td { padding: 7px 14px; vertical-align: top; border-top: 1px solid #e4e7eb; }
+  td.k { width: 108px; font-weight: 700; white-space: nowrap; color: #323f4b; }
+  code { font-family: "DejaVu Sans Mono", monospace; font-size: 13.5px; background: #f0f2f5; padding: 0 4px; border-radius: 3px; }
+  .tag { display: inline-block; border-radius: 4px; padding: 0 6px; margin: 1px 2px; font-size: 14px; border: 1px solid #cbd2d9; background: #fff; }
+  /* 四個模組四個顏色，和串連圖一致 */
+  .c1 { border-color: #2f80c4; } .c1 .hd { background: #e3f0fb; color: #1b5e96; }
+  .c2 { border-color: #8e44ad; } .c2 .hd { background: #f3e8f8; color: #6c3483; }
+  .c3 { border-color: #2e9e4f; } .c3 .hd { background: #e6f4ea; color: #1e7a3a; }
+  .c4 { border-color: #d68910; } .c4 .hd { background: #fdf2e0; color: #9a6309; }
+  .foot { margin-top: 14px; font-size: 14px; color: #616e7c; text-align: center; }
+</style></head>
+<body><div class="page">
+<h1>Low-Code 無人機／地面車系統　四大模組</h1>
+<div class="sub">Node-RED（積木＋儀表板）＋ ROS 2 節點　·　模擬：Gazebo Harmonic ＋ PX4 SITL ／ Husky</div>
+<div class="grid">
+
+<div class="card c1">
+  <div class="hd"><span class="no">①</span>感測／資料輸入模組<span class="en">Sensing &amp; Data Input</span></div>
+  <table>
+    <tr><td class="k">模組功能</td><td>取得兩台載具與環境的即時資料，統一轉成 ROS 2 話題，再讓 Node-RED 讀得到。</td></tr>
+    <tr><td class="k">使用目的</td><td>上層不必碰硬體或模擬細節；模擬與實機的資料格式一樣，換平台只改這一層。</td></tr>
+    <tr><td class="k">包含元件</td><td>
+      <span class="tag">無人機下視相機＋深度 15 Hz</span><span class="tag">地面車前視 RGB-D 15 Hz</span>
+      <span class="tag">PX4 位置／狀態（XRCE-DDS）</span><span class="tag">地面車里程計 30 Hz</span>
+      <span class="tag">ros_gz_bridge</span><span class="tag">積木「ROS2 訂閱」</span>
+      <span class="tag"><code>api/status</code> 5 Hz</span></td></tr>
+    <tr><td class="k">輸入</td><td>感測器原始訊號：相機、深度相機、飛控估測、輪速／模擬真值</td></tr>
+    <tr><td class="k">輸出</td><td>影像 <code>/camera/image</code>、<code>/husky/rgb/image</code>；深度；位置 <code>/MAV1/fmu/out/*</code>、<code>/husky/odom</code>；狀態 JSON <code>api/status</code></td></tr>
+    <tr><td class="k">與其他模組</td><td>影像、深度 → ② AI 分析；位置 → ③ 控制與流程；狀態 → ④ 儀表板</td></tr>
+    <tr><td class="k">適用情境</td><td>所有任務的起點；上實機或換載具時只替換這一層</td></tr>
+  </table>
+</div>
+
+<div class="card c2">
+  <div class="hd"><span class="no">②</span>AI 分析模組<span class="en">AI Analysis</span></div>
+  <table>
+    <tr><td class="k">模組功能</td><td>YOLO 在影像中找出目標車，結合深度與座標轉換，算出目標在地圖上的位置。</td></tr>
+    <tr><td class="k">使用目的</td><td>把「看到的畫面」變成「可以拿來控制的座標」，讓追蹤、搜尋有依據。</td></tr>
+    <tr><td class="k">包含元件</td><td>
+      <span class="tag">yolo_detector（無人機 VisDrone／地面車 COCO 權重）</span>
+      <span class="tag">target_locator（框＋深度 → 3D 點）</span>
+      <span class="tag">point_to_frame／target_world（→ 地圖座標）</span>
+      <span class="tag">debug_image（畫好框的影像）</span></td></tr>
+    <tr><td class="k">輸入</td><td>影像、深度影像、相機內參、TF 座標轉換</td></tr>
+    <tr><td class="k">輸出</td><td>偵測框 <code>detections</code>；目標地圖座標 <code>api/target</code>；畫框影像 <code>debug_image</code></td></tr>
+    <tr><td class="k">與其他模組</td><td>吃 ① 的影像；目標座標給 ③ 做追蹤；畫框影像給 ④ 的相機視窗</td></tr>
+    <tr><td class="k">適用情境</td><td>追蹤目標、跟丟後搜尋；可換權重或換成顏色偵測，其他模組不用改</td></tr>
+  </table>
+</div>
+
+<div class="card c3">
+  <div class="hd"><span class="no">③</span>控制與流程模組<span class="en">Control &amp; Workflow</span></div>
+  <table>
+    <tr><td class="k">模組功能</td><td>把任務拆成積木：每塊呼叫一個服務並等它真的完成；底層把指令變成實際運動。</td></tr>
+    <tr><td class="k">使用目的</td><td>不寫程式就能拖拉組出任務；每塊都有「完成／失敗」兩個出口，例外處理也能用拉線表達。</td></tr>
+    <tr><td class="k">包含元件</td><td>
+      <b>無人機積木 9：</b><span class="tag">起飛</span><span class="tag">調整高度</span><span class="tag">巡航</span><span class="tag">盤旋</span><span class="tag">降落</span><span class="tag">導航到座標</span><span class="tag">追蹤目標</span><span class="tag">返航</span><span class="tag">狀態查詢</span><br>
+      <b>地面車積木 5：</b><span class="tag">車：導航到座標</span><span class="tag">車：停止</span><span class="tag">車：追蹤目標</span><span class="tag">車：返航</span><span class="tag">車：狀態查詢</span><br>
+      <b>共用：</b><span class="tag">ROS2 呼叫服務</span><span class="tag">等待完成</span>
+      <b>底層：</b><span class="tag">drone_api_node</span><span class="tag">husky_api_node</span><span class="tag">Nav2</span><span class="tag">跟隨控制 10 Hz</span><span class="tag">cmd_vel→PX4 橋 20 Hz</span><span class="tag">速度看門狗</span></td></tr>
+    <tr><td class="k">輸入</td><td>流程觸發（按鈕／上一塊完成）；目標座標 <code>api/target</code>；載具位置</td></tr>
+    <tr><td class="k">輸出</td><td>完成／失敗訊號；速度指令 <code>cmd_vel</code>、Nav2 導航目標、PX4 指令；任務進度 <code>task.seq／state</code></td></tr>
+    <tr><td class="k">與其他模組</td><td>吃 ① 的位置與 ② 的目標；由 ④ 觸發，並把進度回報給 ④</td></tr>
+    <tr><td class="k">適用情境</td><td>自訂任務流程、單顆按鈕手動操作、兩台載具同時執行</td></tr>
+  </table>
+</div>
+
+<div class="card c4">
+  <div class="hd"><span class="no">④</span>系統整合模組<span class="en">System Integration</span></div>
+  <table>
+    <tr><td class="k">模組功能</td><td>把前三個模組包成一鍵開關、可監看的系統，並負責 Node-RED 與 ROS 2 之間的連線。</td></tr>
+    <tr><td class="k">使用目的</td><td>零終端機操作；模擬與實機用同一套介面；部署到新電腦只要跑安裝腳本。</td></tr>
+    <tr><td class="k">包含元件</td><td>
+      <span class="tag">rosbridge（ws:9090，Node-RED ↔ ROS 2）</span>
+      <span class="tag">systemd 服務：底座／倉庫場景＋桌面圖示</span>
+      <span class="tag">儀表板：就緒燈、地圖、速度、任務狀態</span>
+      <span class="tag">相機小視窗（web_video_server :8080）</span>
+      <span class="tag">「系統」分頁：開／關模擬</span>
+      <span class="tag">install_flows.sh／install_services.sh</span></td></tr>
+    <tr><td class="k">輸入</td><td>各模組狀態 <code>api/status</code>、畫框影像；使用者的按鈕操作</td></tr>
+    <tr><td class="k">輸出</td><td>儀表板畫面與相機畫面；觸發任務流程；啟動／停止服務</td></tr>
+    <tr><td class="k">與其他模組</td><td>包住 ①②③，是使用者唯一的入口；所有指令與狀態都經過這裡的 rosbridge</td></tr>
+    <tr><td class="k">適用情境</td><td>日常操作、展示、部署到新電腦或實機（Jetson）</td></tr>
+  </table>
+</div>
+
+</div>
+<div class="foot">各模組元件皆為目前專案實際使用者（drone_nodered／husky_nodered／nodered_ros2／drone_vision 套件）</div>
+</div></body></html>

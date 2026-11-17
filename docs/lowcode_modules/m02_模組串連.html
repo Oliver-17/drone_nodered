@@ -1,0 +1,166 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><!-- 由 render.py 產生，不要手改 --></head><body style="margin:0;background:#fff"><svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1150" font-family="Noto Sans CJK TC"><defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3e4c59"/></marker><marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d64545"/></marker><marker id="o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#d68910"/></marker><marker id="p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8e44ad"/></marker></defs><rect width="1600" height="1150" fill="#fff"/><text x="800.0" y="46" text-anchor="middle" font-size="30" font-weight="700" fill="#1f2933">Low-Code 系統　模組串連</text>
+<text x="40" y="100" text-anchor="start" font-size="19" font-weight="700" fill="#1f2933">(A) 資料流：一次「追蹤目標」時，資料怎麼經過四個模組</text>
+<rect x="40" y="170" width="300" height="190" rx="10" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="190.0" y="202" text-anchor="middle" font-size="21" font-weight="700" fill="#1f4e79">① 感測／資料輸入</text>
+<text x="190.0" y="230" text-anchor="middle" font-size="15" fill="#323f4b">相機＋深度（15 Hz）</text>
+<text x="190.0" y="253" text-anchor="middle" font-size="15" fill="#323f4b">PX4 位置／地面車里程計</text>
+<text x="190.0" y="276" text-anchor="middle" font-size="15" fill="#323f4b">ros_gz_bridge</text>
+<text x="190.0" y="299" text-anchor="middle" font-size="15" fill="#323f4b">積木「ROS2 訂閱」</text>
+<rect x="450" y="170" width="300" height="190" rx="10" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="600.0" y="202" text-anchor="middle" font-size="21" font-weight="700" fill="#1f4e79">② AI 分析</text>
+<text x="600.0" y="230" text-anchor="middle" font-size="15" fill="#323f4b">YOLO 找車（框）</text>
+<text x="600.0" y="253" text-anchor="middle" font-size="15" fill="#323f4b">框＋深度 → 3D 點</text>
+<text x="600.0" y="276" text-anchor="middle" font-size="15" fill="#323f4b">→ 地圖座標</text>
+<text x="600.0" y="299" text-anchor="middle" font-size="15" fill="#323f4b">畫框影像 debug_image</text>
+<rect x="860" y="170" width="300" height="190" rx="10" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="1010.0" y="202" text-anchor="middle" font-size="21" font-weight="700" fill="#1f4e79">③ 控制與流程</text>
+<text x="1010.0" y="230" text-anchor="middle" font-size="15" fill="#323f4b">積木：追蹤目標</text>
+<text x="1010.0" y="253" text-anchor="middle" font-size="15" fill="#323f4b">drone_api／husky_api 節點</text>
+<text x="1010.0" y="276" text-anchor="middle" font-size="15" fill="#323f4b">跟隨控制 10 Hz、Nav2</text>
+<text x="1010.0" y="299" text-anchor="middle" font-size="15" fill="#323f4b">看門狗／PX4 橋</text>
+<rect x="1270" y="170" width="290" height="190" rx="10" fill="#eceff1" stroke="#7b8794" stroke-width="2.5"/>
+<text x="1415.0" y="202" text-anchor="middle" font-size="21" font-weight="700" fill="#3e4c59">載具（模擬／實機）</text>
+<text x="1415.0" y="230" text-anchor="middle" font-size="15" fill="#323f4b">無人機：PX4 飛控</text>
+<text x="1415.0" y="253" text-anchor="middle" font-size="15" fill="#323f4b">地面車：Husky 差速驅動</text>
+<text x="1415.0" y="276" text-anchor="middle" font-size="15" fill="#323f4b">Gazebo Harmonic</text>
+<text x="1415.0" y="299" text-anchor="middle" font-size="15" fill="#323f4b">（實機：Jetson＋飛控）</text>
+<line x1="340" y1="265" x2="446" y2="265" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<text x="393.0" y="253" text-anchor="middle" font-size="14" fill="#3e4c59">影像、深度</text>
+<line x1="750" y1="265" x2="856" y2="265" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<text x="803.0" y="253" text-anchor="middle" font-size="14" fill="#3e4c59">api/target</text>
+<text x="805.0" y="291" text-anchor="middle" font-size="14" font-weight="400" fill="#3e4c59">目標地圖座標</text>
+<line x1="1160" y1="265" x2="1266" y2="265" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<text x="1213.0" y="253" text-anchor="middle" font-size="14" fill="#3e4c59">cmd_vel</text>
+<text x="1215.0" y="291" text-anchor="middle" font-size="14" font-weight="400" fill="#3e4c59">Nav2 目標</text>
+<path d="M 1415.0 170 L 1415.0 136 L 190.0 136 L 190.0 166" fill="none" stroke="#3e4c59" stroke-width="2.5" stroke-dasharray="7 5" marker-end="url(#a)"/>
+<text x="800.0" y="128" text-anchor="middle" font-size="15" font-weight="400" fill="#3e4c59">閉迴路：載具移動 → 畫面與位置跟著改變 → 再算一次</text>
+<rect x="40" y="470" width="1520" height="120" rx="10" fill="#dce8f4" stroke="#1f4e79" stroke-width="2.5"/>
+<text x="800.0" y="502" text-anchor="middle" font-size="21" font-weight="700" fill="#1f4e79">④ 系統整合</text>
+<text x="800.0" y="530" text-anchor="middle" font-size="16" fill="#323f4b">rosbridge（ws:9090）連接 Node-RED ↔ ROS 2　·　儀表板（就緒燈、地圖、速度、任務狀態）</text>
+<text x="800.0" y="554" text-anchor="middle" font-size="16" fill="#323f4b">相機小視窗（web_video_server :8080）　·　systemd 服務一鍵開關模擬／底座　·　安裝腳本</text>
+<line x1="190" y1="362" x2="190" y2="466" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<text x="202" y="406" text-anchor="start" font-size="14" fill="#3e4c59">位置、狀態</text>
+<text x="202" y="425" text-anchor="start" font-size="14" fill="#3e4c59">api/status 5 Hz</text>
+<line x1="600" y1="362" x2="600" y2="466" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<text x="612" y="406" text-anchor="start" font-size="14" fill="#3e4c59">畫框影像</text>
+<text x="612" y="425" text-anchor="start" font-size="14" fill="#3e4c59">→ 相機小視窗</text>
+<line x1="960" y1="468" x2="960" y2="364" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<text x="948" y="406" text-anchor="end" font-size="14" fill="#3e4c59">觸發任務</text>
+<text x="948" y="425" text-anchor="end" font-size="14" fill="#3e4c59">（按鈕／流程）</text>
+<line x1="1070" y1="362" x2="1070" y2="466" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<text x="1082" y="406" text-anchor="start" font-size="14" fill="#3e4c59">完成／失敗</text>
+<text x="1082" y="425" text-anchor="start" font-size="14" fill="#3e4c59">任務進度</text>
+<text x="40" y="660" text-anchor="start" font-size="19" font-weight="700" fill="#1f2933">(B) 積木串連：Node-RED「自訂任務」分頁（儀表板按「開始任務」觸發）</text>
+<text x="40" y="688" text-anchor="start" font-size="15" font-weight="400" fill="#52606d">每塊積木 = 呼叫一個服務並等它真的完成；上出口＝完成接下一塊，下出口＝失敗接處置。色點＝這一步動用到的模組（④ 是因為每塊都經過 rosbridge 呼叫服務）。</text>
+<rect x="40" y="810" width="130" height="60" rx="10" fill="#dce8f4" stroke="#1f4e79" stroke-width="2.5"/>
+<text x="105.0" y="842" text-anchor="middle" font-size="18" font-weight="700" fill="#1f4e79">任務開始</text>
+<text x="224" y="720" text-anchor="start" font-size="16" font-weight="700" fill="#1e7a3a">無人機</text>
+<path d="M 170 840 L 200 840 L 200 760 L 226 760" fill="none" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="230" y="732.0" width="168" height="56" rx="8" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="314.0" y="766" text-anchor="middle" font-size="17" font-weight="700" fill="#1f4e79">起飛</text>
+<circle cx="288.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="288.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">①</text>
+<circle cx="314.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="314.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③</text>
+<circle cx="340.0" cy="810.0" r="11" fill="#1f4e79"/>
+<text x="340.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④</text>
+<path d="M 398 774 L 412 774 L 412 830" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r)"/>
+<rect x="436" y="732.0" width="168" height="56" rx="8" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="520.0" y="766" text-anchor="middle" font-size="17" font-weight="700" fill="#1f4e79">導航到座標</text>
+<circle cx="494.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="494.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">①</text>
+<circle cx="520.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="520.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③</text>
+<circle cx="546.0" cy="810.0" r="11" fill="#1f4e79"/>
+<text x="546.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④</text>
+<line x1="398" y1="752" x2="432" y2="752" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<path d="M 604 774 L 618 774 L 618 830" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r)"/>
+<rect x="642" y="732.0" width="168" height="56" rx="8" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="726.0" y="766" text-anchor="middle" font-size="17" font-weight="700" fill="#1f4e79">追蹤目標</text>
+<circle cx="687.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="687.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">①</text>
+<circle cx="713.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="713.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">②</text>
+<circle cx="739.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="739.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③</text>
+<circle cx="765.0" cy="810.0" r="11" fill="#1f4e79"/>
+<text x="765.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④</text>
+<line x1="604" y1="752" x2="638" y2="752" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<path d="M 810 774 L 824 774 L 824 830" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r)"/>
+<rect x="848" y="732.0" width="168" height="56" rx="8" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="932.0" y="766" text-anchor="middle" font-size="17" font-weight="700" fill="#1f4e79">降落</text>
+<circle cx="906.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="906.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">①</text>
+<circle cx="932.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="932.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③</text>
+<circle cx="958.0" cy="810.0" r="11" fill="#1f4e79"/>
+<text x="958.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④</text>
+<line x1="810" y1="752" x2="844" y2="752" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<path d="M 1016 774 L 1030 774 L 1030 830" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r)"/>
+<rect x="1054" y="732.0" width="168" height="56" rx="8" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="1138.0" y="766" text-anchor="middle" font-size="17" font-weight="700" fill="#1f4e79">返航</text>
+<circle cx="1112.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="1112.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">①</text>
+<circle cx="1138.0" cy="810.0" r="11" fill="#2e6da4"/>
+<text x="1138.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③</text>
+<circle cx="1164.0" cy="810.0" r="11" fill="#1f4e79"/>
+<text x="1164.0" y="815.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④</text>
+<line x1="1016" y1="752" x2="1050" y2="752" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<path d="M 1222 774 L 1236 774 L 1236 830" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r)"/>
+<line x1="1222" y1="752" x2="1256" y2="752" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1260" y="732.0" width="150" height="56" rx="28" fill="#fff" stroke="#3e4c59" stroke-width="2"/>
+<text x="1335" y="766" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2933">無人機任務完成</text>
+<line x1="398" y1="836" x2="1236" y2="836" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1252" y="841" text-anchor="start" font-size="15" font-weight="700" fill="#d64545">失敗 → 已降落</text>
+<text x="224" y="910" text-anchor="start" font-size="16" font-weight="700" fill="#1e7a3a">地面車</text>
+<path d="M 170 840 L 200 840 L 200 950 L 226 950" fill="none" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="230" y="922.0" width="168" height="56" rx="8" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="314.0" y="956" text-anchor="middle" font-size="17" font-weight="700" fill="#1f4e79">車：導航到座標</text>
+<circle cx="288.0" cy="1000.0" r="11" fill="#2e6da4"/>
+<text x="288.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">①</text>
+<circle cx="314.0" cy="1000.0" r="11" fill="#2e6da4"/>
+<text x="314.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③</text>
+<circle cx="340.0" cy="1000.0" r="11" fill="#1f4e79"/>
+<text x="340.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④</text>
+<path d="M 398 964 L 412 964 L 412 1020" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r)"/>
+<rect x="436" y="922.0" width="168" height="56" rx="8" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="520.0" y="956" text-anchor="middle" font-size="17" font-weight="700" fill="#1f4e79">車：追蹤目標</text>
+<circle cx="481.0" cy="1000.0" r="11" fill="#2e6da4"/>
+<text x="481.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">①</text>
+<circle cx="507.0" cy="1000.0" r="11" fill="#2e6da4"/>
+<text x="507.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">②</text>
+<circle cx="533.0" cy="1000.0" r="11" fill="#2e6da4"/>
+<text x="533.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③</text>
+<circle cx="559.0" cy="1000.0" r="11" fill="#1f4e79"/>
+<text x="559.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④</text>
+<line x1="398" y1="942" x2="432" y2="942" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<path d="M 604 964 L 618 964 L 618 1020" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r)"/>
+<rect x="642" y="922.0" width="168" height="56" rx="8" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2.5"/>
+<text x="726.0" y="956" text-anchor="middle" font-size="17" font-weight="700" fill="#1f4e79">車：返航</text>
+<circle cx="700.0" cy="1000.0" r="11" fill="#2e6da4"/>
+<text x="700.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">①</text>
+<circle cx="726.0" cy="1000.0" r="11" fill="#2e6da4"/>
+<text x="726.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">③</text>
+<circle cx="752.0" cy="1000.0" r="11" fill="#1f4e79"/>
+<text x="752.0" y="1005.0" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">④</text>
+<line x1="604" y1="942" x2="638" y2="942" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<path d="M 810 964 L 824 964 L 824 1020" fill="none" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#r)"/>
+<line x1="810" y1="942" x2="844" y2="942" stroke="#3e4c59" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="848" y="922.0" width="150" height="56" rx="28" fill="#fff" stroke="#3e4c59" stroke-width="2"/>
+<text x="923" y="956" text-anchor="middle" font-size="16" font-weight="700" fill="#1f2933">地面車任務完成</text>
+<line x1="398" y1="1026" x2="824" y2="1026" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="840" y="1031" text-anchor="start" font-size="15" font-weight="700" fill="#d64545">失敗 → 停止</text>
+<text x="1560" y="838" text-anchor="end" font-size="15" font-weight="400" fill="#52606d">兩條線同時出發、</text>
+<text x="1560" y="860" text-anchor="end" font-size="15" font-weight="400" fill="#52606d">各自用完成／失敗出口往下走</text>
+<rect x="40" y="1090" width="34" height="20" rx="4" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2"/>
+<text x="84" y="1105" text-anchor="start" font-size="15" font-weight="400" fill="#323f4b">① 感測／資料輸入</text>
+<rect x="270" y="1090" width="34" height="20" rx="4" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2"/>
+<text x="314" y="1105" text-anchor="start" font-size="15" font-weight="400" fill="#323f4b">② AI 分析</text>
+<rect x="500" y="1090" width="34" height="20" rx="4" fill="#eaf2fa" stroke="#2e6da4" stroke-width="2"/>
+<text x="544" y="1105" text-anchor="start" font-size="15" font-weight="400" fill="#323f4b">③ 控制與流程</text>
+<rect x="730" y="1090" width="34" height="20" rx="4" fill="#dce8f4" stroke="#1f4e79" stroke-width="2"/>
+<text x="774" y="1105" text-anchor="start" font-size="15" font-weight="400" fill="#323f4b">④ 系統整合</text>
+<rect x="960" y="1090" width="34" height="20" rx="4" fill="#eceff1" stroke="#7b8794" stroke-width="2"/>
+<text x="1004" y="1105" text-anchor="start" font-size="15" font-weight="400" fill="#323f4b">載具／平台</text>
+<line x1="1190" y1="1100" x2="1230" y2="1100" stroke="#d64545" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="1240" y="1105" text-anchor="start" font-size="15" font-weight="400" fill="#323f4b">失敗出口</text></svg></body></html>
