@@ -3507,15 +3507,87 @@
   ]
  },
  {
+  "id": "d0c0ffee00000270",
+  "type": "ui-template",
+  "z": "d0c0ffeeffff0004",
+  "group": "d0c0ffeeuig00004",
+  "page": "",
+  "ui": "",
+  "name": "相機按鈕（開小視窗）",
+  "order": 2,
+  "width": 0,
+  "height": 1,
+  "head": "",
+  "format": "<template>\n  <!-- 兩顆相機按鈕（2026-11-16）。按下去開一個獨立的小視窗（/camera?cam=…，\n       由同一個流程的 http in 節點提供），儀表板本身照常可以操作。\n       第一版是儀表板內的跳出框，但它會擋住整個儀表板，看畫面時就不能下指令。\n\n       為什麼不用兩顆 ui-button：Dashboard 2.0 的訊息預設**送給所有連著的瀏覽器**\n       —— 你在筆電按一下，大螢幕上的儀表板也會跟著開視窗。寫在範本裡，按下去\n       只在本機瀏覽器處理，完全不經過 Node-RED。\n       按鈕用 v-btn 加 ui-button 同樣的 class，外觀和「開始任務」一致。 -->\n  <div style=\"display:flex;gap:12px;width:100%\">\n    <v-btn class=\"nrdb-ui-button\" color=\"primary\" variant=\"flat\"\n           style=\"flex:1 1 0;min-width:0\" @click=\"open('drone')\">無人機相機</v-btn>\n    <v-btn class=\"nrdb-ui-button\" color=\"primary\" variant=\"flat\"\n           style=\"flex:1 1 0;min-width:0\" @click=\"open('husky')\">地面車相機</v-btn>\n  </div>\n</template>\n\n<script>\nexport default {\n  methods: {\n    open (k) {\n      // 視窗名稱固定（cam_drone / cam_husky）：同一顆按第二次不會再多開一個，\n      // 而是重新載入原本那個並叫到最前面。\n      // 'popup' + 寬高 → 桌機是獨立的小視窗；手機、平板沒有小視窗，會開成新分頁。\n      // 640x480 的畫面＋32 px 標題列。\n      const w = window.open(`${window.location.origin}/camera?cam=${k}`, `cam_${k}`,\n                            'popup,width=660,height=530')\n      if (w) w.focus()\n    }\n  }\n}\n</script>\n",
+  "storeOutMessages": false,
+  "passthru": false,
+  "resendOnRefresh": false,
+  "templateScope": "local",
+  "className": "",
+  "x": 300,
+  "y": 1040,
+  "wires": [
+   []
+  ]
+ },
+ {
+  "id": "d0c0ffee00000271",
+  "type": "http in",
+  "z": "d0c0ffeeffff0004",
+  "name": "相機頁",
+  "url": "/camera",
+  "method": "get",
+  "upload": false,
+  "swaggerDoc": "",
+  "x": 290,
+  "y": 1100,
+  "wires": [
+   [
+    "d0c0ffee00000272"
+   ]
+  ]
+ },
+ {
+  "id": "d0c0ffee00000272",
+  "type": "function",
+  "z": "d0c0ffeeffff0004",
+  "name": "組相機頁 HTML",
+  "func": "// GET /camera?cam=drone|husky → 一頁只有相機畫面的網頁（給儀表板的小視窗用）。\n//\n// 為什麼由 Node-RED 提供這一頁，而不是讓按鈕直接開 web_video_server 的網址：\n//   直接開串流網址只會得到一張原尺寸的圖貼在左上角，視窗拉大也不會跟著放大，\n//   沒畫面時一片空白，看不出是沒開還是壞了。包一層網頁才能自動填滿視窗、\n//   顯示「沒有影像」，而且能重新整理、能加到書籤。\n//\n// 影像本身還是瀏覽器直接連 web_video_server（8080 埠）拿，不經過 Node-RED。\nconst CAMS = {\n    drone: { title: \"無人機相機\", topic: \"/debug_image\" },          // 無人機的偵測節點沒推命名空間\n    husky: { title: \"地面車相機\", topic: \"/husky/debug_image\" },\n};\nconst cam = CAMS[(msg.req.query.cam || \"\").toString()];\nmsg.headers = { \"Content-Type\": \"text/html; charset=utf-8\", \"Cache-Control\": \"no-store\" };\nif (!cam) {\n    msg.statusCode = 404;\n    msg.payload = \"<meta charset=utf-8>不認得的相機。可用：\" +\n        Object.keys(CAMS).map(k => `<a href=\"?cam=${k}\">${k}</a>`).join(\"、\");\n    return msg;\n}\nmsg.payload = `<!doctype html>\n<html lang=\"zh-Hant\"><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>${cam.title}</title>\n<style>\n  html, body { margin: 0; height: 100%; background: #000; color: #ddd;\n               font-family: system-ui, \"Noto Sans CJK TC\", sans-serif; }\n  body { display: flex; flex-direction: column; }\n  header { display: flex; align-items: baseline; gap: 12px; padding: 6px 12px;\n           background: #1e1e1e; font-size: 15px; flex: none; }\n  header small { opacity: 0.55; font-size: 12px; }\n  header .st { margin-left: auto; font-size: 12px; opacity: 0.8; }\n  main { position: relative; flex: 1; min-height: 0; }\n  /* contain：視窗拉成什麼比例都看得到整張畫面，多的地方留黑邊 */\n  img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }\n  #msg { position: absolute; inset: 0; display: flex; align-items: center;\n         justify-content: center; text-align: center; padding: 16px; }\n</style></head>\n<body>\n<header>${cam.title}<small>${cam.topic}</small><span class=\"st\" id=\"st\"></span></header>\n<main><img id=\"img\" alt=\"\"><div id=\"msg\">連線中…</div></main>\n<script>\n  const img = document.getElementById(\"img\");\n  const msg = document.getElementById(\"msg\");\n  const st = document.getElementById(\"st\");\n  const base = location.protocol + \"//\" + location.hostname + \":8080/stream?topic=${cam.topic}\" +\n               \"&type=mjpeg&quality=70\";\n  let broken = false, waited = 0;\n\n  // t= 讓每次都是新網址，否則瀏覽器會沿用上一條（可能已斷掉的）連線\n  function connect () {\n    broken = false; waited = 0;\n    img.src = base + \"&t=\" + Date.now();\n  }\n  img.onerror = () => { broken = true; };\n\n  // MJPEG 的 <img> 不保證每一幀都觸發 load，所以用 naturalWidth 判斷「收到第一張了沒」。\n  // 一直沒畫面（模擬還沒開）或連線斷了（底座重啟）就每 5 秒重連一次 ——\n  // 這樣可以先把視窗開著擺在旁邊，等模擬開起來畫面就自己出現，不用重開視窗。\n  setInterval(() => {\n    const live = img.naturalWidth > 0 && !broken;\n    msg.style.display = live ? \"none\" : \"flex\";\n    st.textContent = live ? \"● 即時\" : \"\";\n    if (live) return;\n    waited += 0.5;\n    if (broken) msg.textContent = \"連不上影像伺服器（web_video_server 沒開？）每 5 秒重試\";\n    else if (waited >= 8) msg.textContent = \"沒有影像（模擬或偵測節點沒開）每 5 秒重試\";\n    if ((broken && waited >= 5) || waited >= 13) connect();\n  }, 500);\n\n  // 視窗縮小到工作列或切到別的分頁時就斷線，不讓 web_video_server 白白編碼\n  document.addEventListener(\"visibilitychange\", () => {\n    if (document.hidden) { img.removeAttribute(\"src\"); }\n    else { connect(); }\n  });\n  connect();\n</script>\n</body></html>`;\nreturn msg;\n",
+  "outputs": 1,
+  "timeout": 0,
+  "noerr": 0,
+  "initialize": "",
+  "finalize": "",
+  "libs": [],
+  "x": 500,
+  "y": 1100,
+  "wires": [
+   [
+    "d0c0ffee00000273"
+   ]
+  ]
+ },
+ {
+  "id": "d0c0ffee00000273",
+  "type": "http response",
+  "z": "d0c0ffeeffff0004",
+  "name": "",
+  "statusCode": "",
+  "headers": {},
+  "x": 700,
+  "y": 1100,
+  "wires": []
+ },
+ {
   "id": "d0c0ffee00000260",
   "type": "ui-spacer",
   "z": "d0c0ffeeffff0004",
   "name": "撐高：和「模擬」等高",
   "group": "d0c0ffeeuig00004",
   "tooltip": "",
-  "order": 2,
+  "order": 3,
   "width": 0,
-  "height": 2,
+  "height": 1,
   "className": "",
   "x": 300,
   "y": 980,

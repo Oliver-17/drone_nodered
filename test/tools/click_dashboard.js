@@ -59,7 +59,9 @@ function getJson(path) {
         const pending = {};
         ws.on("message", (m) => { const j = JSON.parse(m); if (pending[j.id]) { pending[j.id](j); delete pending[j.id]; } });
         const call = (method, params = {}) => new Promise((r) => { pending[++id] = r; ws.send(JSON.stringify({ id, method, params })); });
-        const evalJs = async (expr) => (await call("Runtime.evaluate", { expression: expr, returnByValue: true })).result.result.value;
+        // userGesture：讓 el.click() 算成「使用者點的」。不加的話 window.open 會被
+        // Chrome 的彈出視窗攔截靜靜擋掉 —— 真人用滑鼠點不會，只有腳本點會。
+        const evalJs = async (expr) => (await call("Runtime.evaluate", { expression: expr, returnByValue: true, userGesture: true })).result.result.value;
 
         // 等儀表板畫完（按鈕出現）
         let ready = false;
@@ -85,6 +87,24 @@ function getJson(path) {
         const shot = await call("Page.captureScreenshot", { format: "png" });
         fs.writeFileSync(SHOT, Buffer.from(shot.result.data, "base64"));
         console.log("截圖：" + SHOT);
+
+        // 按鈕如果開了新視窗（例如「無人機相機」用 window.open 開 /camera），
+        // 只截儀表板會以為什麼都沒發生。把每個新視窗的網址印出來，也各截一張。
+        const others = (await getJson("/json").catch(() => []))
+            .filter((p) => p.type === "page" && p.id !== page.id);
+        for (const [i, p] of others.entries()) {
+            console.log("新視窗：" + p.url);
+            const w = new WebSocket(p.webSocketDebuggerUrl);
+            await new Promise((r) => w.on("open", r));
+            const shotW = await new Promise((r) => {
+                w.on("message", (m) => { const j = JSON.parse(m); if (j.id === 1) r(j); });
+                w.send(JSON.stringify({ id: 1, method: "Page.captureScreenshot", params: { format: "png" } }));
+            });
+            const f = SHOT.replace(/\.png$/, "") + `_win${i + 1}.png`;
+            fs.writeFileSync(f, Buffer.from(shotW.result.data, "base64"));
+            console.log("新視窗截圖：" + f);
+            w.close();
+        }
         done(0);
     } catch (e) {
         console.error("✗ " + e.message);

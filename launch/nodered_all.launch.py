@@ -68,6 +68,34 @@ def _husky(context, *args, **kwargs):
                  parameters=[{"namespace": "husky"}])]
 
 
+def _video(context, *args, **kwargs):
+    """相機畫面的網頁串流（儀表板「無人機相機／地面車相機」兩顆按鈕用）。
+
+    為什麼不走 rosbridge：一張 640x480 的影像轉成 JSON 是幾百 KB 的文字，
+    每秒十幾張會把 Node-RED 拖垮。web_video_server 把 ROS 影像話題直接轉成
+    MJPEG，瀏覽器用一個 <img> 就能顯示，影像完全不經過 Node-RED。
+    網址：http://<主機>:8080/stream?topic=/husky/debug_image
+
+    有人在看才會訂閱、編碼；沒開視窗時幾乎不花 CPU。
+    沒裝套件就安靜跳過（sudo apt install ros-humble-web-video-server），
+    儀表板的跳出框會顯示「沒有影像」，其他功能不受影響。
+    """
+    if LaunchConfiguration("video").perform(context).lower() not in ("true", "1"):
+        return []
+    try:
+        get_package_share_directory("web_video_server")
+    except Exception:                                            # noqa: BLE001
+        print("[nodered_all] 沒有 web_video_server —— 儀表板的相機按鈕會沒有畫面。"
+              "安裝：sudo apt install ros-humble-web-video-server")
+        return []
+    return [Node(package="web_video_server", executable="web_video_server",
+                 name="web_video_server", output="log",
+                 parameters=[{
+                     "port": int(LaunchConfiguration("video_port").perform(context)),
+                     "address": LaunchConfiguration("video_address").perform(context),
+                 }])]
+
+
 def generate_launch_description():
     ns = LaunchConfiguration("namespace")
     return LaunchDescription([
@@ -129,6 +157,14 @@ def generate_launch_description():
         # 軟相依：husky_nodered 沒裝就自動跳過（下面 _husky 會檢查）。
         DeclareLaunchArgument("husky_api", default_value="true"),
 
+        DeclareLaunchArgument("video", default_value="true",
+                              description="web_video_server（儀表板的相機畫面）"),
+        DeclareLaunchArgument("video_port", default_value="8080"),
+        # 和 rosbridge 不同，預設開放給網路：影像是瀏覽器**直接**連過來拿的
+        # （不經過 Node-RED），只給本機的話，從筆電開儀表板就看不到畫面。
+        # 它只能看、不能下指令，所以不像 rosbridge 那樣有被遙控的風險。
+        DeclareLaunchArgument("video_address", default_value="0.0.0.0",
+                              description="0.0.0.0 開放給網路；127.0.0.1 只給本機"),
         DeclareLaunchArgument("rosbridge_address", default_value="127.0.0.1",
                               description="127.0.0.1 只給本機；跨電腦（實機）要 0.0.0.0"),
         DeclareLaunchArgument("nodered_port", default_value="1880"),
@@ -165,5 +201,6 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration("drone_api")),
         ),
         OpaqueFunction(function=_husky),
+        OpaqueFunction(function=_video),
         OpaqueFunction(function=_nodered),
     ])

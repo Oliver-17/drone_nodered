@@ -162,6 +162,7 @@ offboard 要**每秒送 20 次** setpoint，中間只要 Node-RED、瀏覽器或
 | micro-XRCE-DDS Agent | — | PX4 ↔ ROS 2 的橋 |
 | px4_msgs | 與 PX4 版本相符 | ROS 2 這邊的訊息定義 |
 | rosbridge_suite | `sudo apt install ros-humble-rosbridge-suite` | Node-RED ↔ ROS 2 |
+| web_video_server | `sudo apt install ros-humble-web-video-server`（3.1.0） | 儀表板的相機畫面（沒裝的話只有相機按鈕沒畫面，其他照常） |
 | Node.js | 24.x | Node-RED 的執行環境 |
 | Node-RED | 5.0.7（[官方安裝腳本](https://nodered.org/docs/getting-started/local)） | 流程編輯器 |
 
@@ -214,7 +215,36 @@ offboard 要**每秒送 20 次** setpoint，中間只要 Node-RED、瀏覽器或
 
 > 結果、狀態、log 都在右側的 **Debug** 分頁（蟲子圖示）。
 
-### 3.3 空白世界裡看不到無人機？
+### 3.3 儀表板的相機畫面（2026-11-16）
+
+「任務」分區有兩顆按鈕：**無人機相機**、**地面車相機**。按下去會開一個獨立的小視窗，
+顯示 YOLO 畫好框的即時畫面。儀表板照常可以操作，視窗可以拖到旁邊或另一個螢幕。
+（第一版是儀表板內的跳出框，看畫面時會擋住整個儀表板，所以改掉了。）
+
+| 按鈕 | 小視窗網址 | 話題 | 誰發的 |
+|---|---|---|---|
+| 無人機相機 | `localhost:1880/camera?cam=drone` | `/debug_image` | `vision.launch.py` 的偵測節點（沒推命名空間） |
+| 地面車相機 | `localhost:1880/camera?cam=husky` | `/husky/debug_image` | `husky_vision.launch.py` 的偵測節點 |
+
+- 同一顆按第二次不會再多開一個視窗，只會把原本那個叫到最前面。手機、平板會開成新分頁。
+- 偵測節點**每一幀都發**（沒偵測到也發，只是沒有框），所以只要偵測節點開著就有畫面。
+  沒畫面時視窗寫「沒有影像（模擬或偵測節點沒開）」，並且**每 5 秒自己重連** ——
+  可以先把視窗開著擺好，等模擬起來畫面就自己出現。
+- 視窗縮到工作列或切到別的分頁時會斷線，回來時自動重連，不讓伺服器白白編碼。
+- 影像**不走 rosbridge**：一張圖轉成 JSON 是幾百 KB 的文字，會把 Node-RED 拖垮。
+  底座多開一個 `web_video_server`（8080 埠）把話題轉成 MJPEG，瀏覽器直接連它拿。
+  `/camera` 這一頁由「儀表板」分頁的 http in 節點提供，只負責排版和「沒有影像」的提示。
+  直接看串流：`http://localhost:8080/stream?topic=/husky/debug_image`；
+  列出所有能看的話題：`http://localhost:8080/`。
+- 兩顆按鈕寫在一個 ui-template 裡，不是 ui-button：ui-button 的訊息 Dashboard 2.0 會
+  廣播給**所有**連著的瀏覽器 —— 你在筆電按一下，大螢幕上也會跟著開視窗。
+- 8080 預設開放給網路（`video_address:=0.0.0.0`）：影像是瀏覽器直接連過去拿的，
+  只給本機的話，從別台電腦開儀表板就看不到。它只能看、不能下指令。
+  實機時 web_video_server 要裝在跑底座的那台（Jetson）。不想開：`video:=false`。
+- 測試：`test/tools/click_dashboard.js "任務" "地面車相機" 截圖.png` 會真的去按，
+  並把開出來的新視窗也截一張（`截圖_win1.png`）。
+
+### 3.4 空白世界裡看不到無人機？
 
 正常。空白世界沒有參照物，預設鏡頭在 6 公尺外，而 x500 只有 0.5 公尺，看起來像一個小點。
 滑鼠滾輪推近，或在右側 Entity Tree 的 `x500_0` 按右鍵 → **Move to**。

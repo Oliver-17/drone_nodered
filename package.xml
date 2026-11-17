@@ -24,6 +24,7 @@
   <!-- 視覺任務：把 Gazebo 的影像搬進 ROS，偵測和定位在 drone_vision -->
   <exec_depend>ros_gz_bridge</exec_depend>
   <exec_depend>drone_vision</exec_depend>
+  <exec_depend>web_video_server</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
